@@ -281,6 +281,13 @@ export function setCommitStepHandler(fn) { commitStepHandler = fn; }
 
 const commitFileLists = new Map(); // SHA -> CommitFile[] (a commit's files never change)
 
+// The nearest file from i in direction dir that can be opened: binary files
+// have no text diff and /api/file refuses them, so stepping passes over them.
+function commitStepTarget(files, i, dir) {
+  for (let k = i + dir; k >= 0 && k < files.length; k += dir) if (!files[k].binary) return k;
+  return -1;
+}
+
 /* Where a pinned tab's file sits in its commit, with ‹ › to step through the
    rest. The file list is fetched on first need and filled in when it lands. */
 function commitStrip(d) {
@@ -298,8 +305,8 @@ function commitStrip(d) {
       (f.binary ? '' : (f.add ? '<span class="up-file-add">+' + f.add + '</span>' : '') + (f.del ? '<span class="up-file-del">&minus;' + f.del + '</span>' : '')) +
       '<span class="grow"></span>' +
       '<span class="dcs-pos">' + (i + 1) + ' / ' + files.length + '</span>' +
-      '<button type="button" class="dcs-step" data-commit-step="-1" title="Previous file in this commit"' + (i === 0 ? ' disabled' : '') + '>‹</button>' +
-      '<button type="button" class="dcs-step" data-commit-step="1" title="Next file in this commit"' + (i === files.length - 1 ? ' disabled' : '') + '>›</button>';
+      '<button type="button" class="dcs-step" data-commit-step="-1" title="Previous file in this commit"' + (commitStepTarget(files, i, -1) < 0 ? ' disabled' : '') + '>‹</button>' +
+      '<button type="button" class="dcs-step" data-commit-step="1" title="Next file in this commit"' + (commitStepTarget(files, i, 1) < 0 ? ' disabled' : '') + '>›</button>';
     el.dataset.i = i;
   };
   const sha = d.diffRef;
@@ -551,7 +558,7 @@ export function initDiff() {
     if (step) {
       const d = doc_();
       const files = d && commitFileLists.get(d.diffRef);
-      const next = files?.[+step.closest('.diff-commit-strip').dataset.i + +step.dataset.commitStep];
+      const next = files?.[commitStepTarget(files, +step.closest('.diff-commit-strip').dataset.i, +step.dataset.commitStep)];
       if (!step.disabled && next && commitStepHandler) commitStepHandler(d, next);
       return;
     }
