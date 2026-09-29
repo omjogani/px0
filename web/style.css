@@ -386,6 +386,46 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
   flex: 1; min-width: 0; font: 11.5px var(--ui); color: var(--fg);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.4;
 }
+.git-commit-row:focus-visible, .git-commit-file:focus-visible {
+  outline: 1px solid var(--accent); outline-offset: -1px;
+}
+.git-commit-caret {
+  flex: none; color: var(--faint); transition: transform .12s;
+}
+.git-commit.expanded .git-commit-caret { transform: rotate(90deg); color: var(--fg); }
+.git-commit-sha {
+  flex: none; padding: 0 4px; border: 1px solid transparent; border-radius: var(--r);
+  background: none; color: var(--faint); font: 10.5px/1.5 var(--mono); cursor: copy;
+}
+.git-commit-row:hover .git-commit-sha { color: var(--dim); border-color: var(--line); }
+.git-commit-sha:hover { color: var(--accent) !important; border-color: var(--accent) !important; }
+.git-commit-files {
+  display: flex; flex-direction: column; gap: 1px;
+  margin: 1px 0 4px 13px; padding-left: 8px; border-left: 1px solid var(--line);
+}
+.git-commit-files[hidden] { display: none; }
+.git-commit-meta, .git-commit-note {
+  font: 10.5px/1.5 var(--ui); color: var(--faint); padding: 1px 6px 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.git-commit-file {
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 2px 6px; border-radius: var(--r);
+  font: 11.5px/1.4 var(--ui); cursor: pointer; user-select: none;
+}
+.git-commit-file:hover { background: var(--bg3); }
+.git-commit-file.active { background: var(--sel); }
+.gcf-st { flex: none; width: 10px; font: 600 10.5px var(--mono); text-align: center; color: var(--faint); }
+.gcf-st-A { color: var(--gi); }
+.gcf-st-D { color: var(--gd); }
+.gcf-st-M, .gcf-st-T { color: var(--nc); }
+.gcf-st-R, .gcf-st-C { color: var(--accent); }
+.gcf-name { flex: none; max-width: 70%; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gcf-dir { flex: 1; min-width: 0; color: var(--faint); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gcf-stat { flex: none; display: inline-flex; gap: 4px; font: 10.5px var(--mono); }
+.gcf-add { color: var(--gi); }
+.gcf-del { color: var(--gd); }
+.gcf-bin { color: var(--faint); }
 .git-see-all-wrap {
   padding: 3px 6px 2px;
 }
@@ -985,6 +1025,29 @@ body.word-wrap .c { white-space: pre-wrap; word-break: break-word; overflow-wrap
 #diffview { position: absolute; inset: 0; overflow: auto; background: var(--bg); }
 #diffcontent { font: var(--fs)/var(--lh) var(--mono); padding-bottom: 40vh; }
 .diff-empty { padding: 24px 16px; color: var(--faint); font: 12px/1.4 var(--ui); }
+/* Commit tab header: which commit, which of its files, and stepping between them. */
+.diff-commit-strip {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 12px; background: var(--bg2); border-bottom: 1px solid var(--line);
+  font: 12px/1.4 var(--ui);
+}
+.dcs-commit, .dcs-file { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dcs-sha { flex: none; font: 11px var(--mono); color: var(--accent); }
+.dcs-subject { min-width: 0; color: var(--fg); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dcs-merge {
+  flex: none; padding: 0 5px; border: 1px solid var(--line); border-radius: var(--r);
+  color: var(--faint); font-size: 10.5px;
+}
+.dcs-path { min-width: 0; color: var(--dim); font: 11.5px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dcs-file .grow { flex: 1; }
+.dcs-pos { flex: none; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.dcs-step {
+  flex: none; width: 22px; height: 20px; padding: 0;
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--bg); color: var(--fg); font: 14px/1 var(--ui); cursor: pointer;
+}
+.dcs-step:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.dcs-step:disabled { opacity: .4; cursor: default; }
 .diff-hunk-head {
   position: sticky; top: 0; z-index: 1; padding: 4px 12px;
   color: var(--accent-fg); background: var(--bg3);
@@ -1163,6 +1226,9 @@ body.word-wrap .c { white-space: pre-wrap; word-break: break-word; overflow-wrap
 .tab.tab-image { display: inline-flex; align-items: center; gap: 5px; }
 .tab.tab-image .tab-icon { color: var(--faint); flex-shrink: 0; }
 .tab.tab-image.active .tab-icon { color: var(--accent); }
+.tab.tab-commit { display: inline-flex; align-items: center; gap: 5px; }
+.tab.tab-commit .tab-icon { color: var(--faint); flex-shrink: 0; }
+.tab.tab-commit.active .tab-icon { color: var(--accent); }
 
 /* Markdown Image Enhancement & Broken Fallback */
 .md img.md-zoomable { cursor: zoom-in; transition: transform 0.15s ease, box-shadow 0.15s ease; border-radius: var(--r); max-width: 100%; }

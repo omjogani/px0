@@ -149,6 +149,7 @@ async function handleGitStatus(data) {
   if (!S.meta?.pr) {
     for (let i = S.tabs.length - 1; i >= 0; i--) {
       const t = S.tabs[i];
+      if (t.rev) continue; // commit tabs don't track the working tree
       const code = statuses[t.path];
       const isDiff = !!code && code !== 'U';
       const wasDiff = !!(t.diffMode || t.openedInDiffView);
@@ -160,6 +161,7 @@ async function handleGitStatus(data) {
 
   // Check if any open tabs are affected by modifications
   const anyTabModified = S.tabs.some(t => {
+    if (t.rev) return false;
     const code = statuses[t.path];
     return code && code !== 'U';
   });
@@ -171,6 +173,7 @@ async function handleGitStatus(data) {
     // Synchronize open tabs' diff badges
     let tabsChanged = false;
     for (const t of S.tabs) {
+      if (t.rev) continue;
       const code = statuses[t.path];
       const isDiff = !!code && code !== 'U';
       if (t.diffAvailable !== isDiff) {
@@ -184,7 +187,7 @@ async function handleGitStatus(data) {
 
     // Update active editor gutter and diff view if active document is affected
     const curDoc = doc_();
-    if (curDoc) {
+    if (curDoc && !curDoc.rev) {
       const curCode = statuses[curDoc.path];
       const hasDiff = !!curCode && curCode !== 'U';
 

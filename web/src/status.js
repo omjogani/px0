@@ -6,7 +6,7 @@ import { copyToClipboard, showToast } from './ui.js';
 export function updateStatus() {
   const d = doc_();
   const sizeEl = $('#st-size');
-  if (sizeEl) sizeEl.textContent = d ? fmtBytes(d.size) : '';
+  if (sizeEl) sizeEl.textContent = d && !d.rev ? fmtBytes(d.size) : '';
 
   if (d && d.isImage) {
     const posEl = $('#st-pos');
@@ -56,12 +56,15 @@ export function updateStatus() {
       btn.disabled = !hasDiff;
       btn.classList.toggle('disabled', !hasDiff);
       btn.classList.toggle('on', hasDiff && isDiffOn);
-      btn.title = hasDiff
-        ? withKeys(`Show changes against HEAD, ${currentLayout === 'unified' ? 'unified' : 'split'} ({Mod+D})`)
-        : 'There are no git modified files.';
+      btn.title = d?.rev
+        ? `Changes in commit ${d.commit.short}, ${currentLayout === 'unified' ? 'unified' : 'split'}`
+        : hasDiff
+          ? withKeys(`Show changes against HEAD, ${currentLayout === 'unified' ? 'unified' : 'split'} ({Mod+D})`)
+          : 'There are no git modified files.';
     }
     const srcBtn = $('#diff-source');
     if (srcBtn) {
+      srcBtn.hidden = !!d?.rev; // a commit tab is diff-only
       srcBtn.classList.toggle('on', !hasDiff || !isDiffOn);
       srcBtn.title = withKeys('Show the file ({Mod+D})');
     }

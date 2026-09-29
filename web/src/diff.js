@@ -62,14 +62,14 @@ export function diffScrollTop() {
 export async function toggleDiff() {
   if (!S.meta?.git) return;
   const d = doc_();
-  if (!d) return;
+  if (!d || d.rev) return; // a commit tab has no source view to toggle to
   if (!d.diffMode && !d.diffAvailable) { setStatusNote('No diff — clean file or not a git repo', 4000); return; }
   setDiffMode(d.diffMode ? 'source' : (layoutPref() || 'split'));
 }
 
 export async function setDiffMode(mode) {
   const d = doc_();
-  if (!d) return;
+  if (!d || (d.rev && mode === 'source')) return;
   if (mode !== 'source' && !d.diffAvailable) { setStatusNote('No diff — clean file or not a git repo', 4000); return; }
   if (mode === 'source') {
     d.diffMode = null;
@@ -89,10 +89,14 @@ async function drawDiff(d, force = false) {
   if (force || d.diffText === undefined) {
     diffContent.replaceChildren();
     try {
-      d.diffReq = api('/api/diff', { path: d.path });
+      d.diffReq = d.rev
+        ? api('/api/git/show/diff', { rev: d.rev, path: d.path })
+        : api('/api/diff', { path: d.path });
       const j = await d.diffReq;
       d.diffText = j.diff || '';
       d.diffHunks = j.hunks || parseDiff(d.diffText);
+      d.diffBinary = !!j.binary;
+      d.diffTruncated = !!j.truncated;
       // In a PR review session the server also splits the diff at the PR's
       // checked-out head commit: prDiff is the PR's own change (frozen since
       // checkout/last Pull), yourDiff is whatever the reviewer has edited or
@@ -114,7 +118,7 @@ async function drawDiff(d, force = false) {
   if (d.diffScroll) {
     diffview.scrollTop = d.diffScroll;
     d.diffScroll = 0;
-  } else if (d.cur) {
+  } else if (d.cur && !d.rev) {
     scrollDiffToLine(d.cur);
   }
 }
@@ -141,6 +145,11 @@ function appendHunks(frag, hunks, mode, reviewable) {
 function renderDiff(d) {
   diffContent.replaceChildren();
   const frag = document.createDocumentFragment();
+  if (d.rev) {
+    renderCommitDiff(d, frag);
+    diffContent.append(frag);
+    return;
+  }
   if (S.meta?.pr && d.prDiffHunks !== undefined) {
     const prHunks = d.prDiffHunks || [];
     const yourHunks = d.yourDiffHunks || [];
@@ -174,6 +183,54 @@ function renderDiff(d) {
   diffContent.append(frag);
   syncDiffAgentTargets();
   if (prSyncHandler) prSyncHandler();
+}
+
+// Commit tab (see openCommitFile in tabs.js): the strip, then hunks drawn
+// with plainLines, since their line numbers don't match the file on disk.
+function renderCommitDiff(d, frag) {
+  frag.append(commitStrip(d));
+  if (d.diffBinary) frag.append(diffEmpty('Binary file changed.'));
+  else if (!d.diffHunks || !d.diffHunks.length) frag.append(diffEmpty(d.diffHunks ? 'No textual changes.' : 'Loading…'));
+  else {
+    plainLines = true;
+    try { appendHunks(frag, d.diffHunks, d.diffMode, false); } finally { plainLines = false; }
+    if (d.diffTruncated) frag.append(sectionNote('Diff truncated: this file\'s change is too large to show in full.'));
+  }
+}
+
+export const COMMIT_STATUS_NAMES = { A: 'Added', M: 'Modified', D: 'Deleted', R: 'Renamed', C: 'Copied', T: 'Type changed' };
+
+function commitStrip(d) {
+  const c = d.commit;
+  const files = c.files || [];
+  const i = files.findIndex(f => f.path === d.path);
+  const f = files[i] || d.commitFile;
+  const el = document.createElement('div');
+  el.className = 'diff-commit-strip';
+  const path = f.oldPath ? esc(f.oldPath) + ' → ' + esc(f.path) : esc(f.path);
+  el.innerHTML =
+    '<div class="dcs-commit">' +
+      '<span class="dcs-sha" title="' + esc(c.hash) + '">' + esc(c.short) + '</span>' +
+      '<span class="dcs-subject" title="' + esc(c.subject) + '">' + esc(c.subject || '(no message)') + '</span>' +
+      (c.merge ? '<span class="dcs-merge" title="Changes are shown against the first parent">merge</span>' : '') +
+    '</div>' +
+    '<div class="dcs-file">' +
+      '<span class="gcf-st gcf-st-' + esc(f.status) + '" title="' + esc(COMMIT_STATUS_NAMES[f.status] || f.status) + '">' + esc(f.status) + '</span>' +
+      '<span class="dcs-path" title="' + path + '">' + path + '</span>' +
+      (f.binary ? '' : '<span class="gcf-stat">' + (f.add ? '<span class="gcf-add">+' + f.add + '</span>' : '') + (f.del ? '<span class="gcf-del">−' + f.del + '</span>' : '') + '</span>') +
+      '<span class="grow"></span>' +
+      '<span class="dcs-pos">' + (i + 1) + ' / ' + files.length + '</span>' +
+      '<button type="button" class="dcs-step" data-commit-step="-1" title="Previous file in this commit"' + (i <= 0 ? ' disabled' : '') + '>‹</button>' +
+      '<button type="button" class="dcs-step" data-commit-step="1" title="Next file in this commit"' + (i < 0 || i >= files.length - 1 ? ' disabled' : '') + '>›</button>' +
+    '</div>';
+  return el;
+}
+
+function diffEmpty(text) {
+  const p = document.createElement('div');
+  p.className = 'diff-empty';
+  p.textContent = text;
+  return p;
 }
 
 function createDiffSection(d, kind, title, sub, populateBody) {
@@ -243,6 +300,13 @@ export function setPRSyncHandler(fn) { prSyncHandler = fn; }
 let sourceJumpHandler = null;
 export function setSourceJumpHandler(fn) { sourceJumpHandler = fn; }
 
+/* Same one-way registration for the commit strip's ‹ › buttons. */
+let commitStepHandler = null;
+export function setCommitStepHandler(fn) { commitStepHandler = fn; }
+
+// True while a commit tab's hunks render: line numbers become plain text.
+let plainLines = false;
+
 // The working-tree line number of whichever diff row currently sits at the
 // top of the scrolled viewport -- what "Source" should land on so switching
 // out of diff view keeps you where you were reading, not wherever the
@@ -261,7 +325,7 @@ function currentDiffLine() {
 export function syncDiffAgentTargets() {
   if (!diffview || diffview.hidden) return;
   const d = doc_();
-  if (!d) return;
+  if (!d || d.rev) return;
   const ranges = (S.agentTargets || []).filter(t => t.path === d.path);
   for (const el of diffview.querySelectorAll('[data-l]')) {
     const l = +el.dataset.l;
@@ -392,7 +456,7 @@ function anchor(el, row, reviewable = true) {
 function lineCell(n, reviewable = true) {
   const el = document.createElement('div');
   el.className = 'diff-ln';
-  if (n !== '' && n !== undefined) {
+  if (n !== '' && n !== undefined && !plainLines) {
     el.classList.add('diff-ln-nav');
     let title = 'Open in file view at line ' + n;
     const d = doc_();
@@ -476,6 +540,11 @@ export function initDiff() {
   // the diff shows what changed, but reading it usually means seeing it in
   // context, not just the hunk. Clicking a symbol highlights and opens hover actions.
   diffContent.addEventListener('click', e => {
+    const step = e.target.closest('[data-commit-step]');
+    if (step) {
+      if (!step.disabled && commitStepHandler) commitStepHandler(+step.dataset.commitStep);
+      return;
+    }
     if (e.target.closest('.line-btn')) return;
     const cell = e.target.closest('.diff-ln-nav');
     if (cell) {

@@ -250,6 +250,7 @@ When developers use px0 to inspect AI agent changes or review git branches, they
    ```javascript
    for (let i = S.tabs.length - 1; i >= 0; i--) {
      const t = S.tabs[i];
+     if (t.rev) continue; // commit tabs don't track the working tree
      const code = statuses[t.path];
      const isDiff = !!code && code !== 'U';
      const wasDiff = !!(t.diffMode || t.openedInDiffView);
@@ -266,7 +267,30 @@ When developers use px0 to inspect AI agent changes or review git branches, they
 
 `gitDiff`/`gitHunks` above are thin `base="HEAD"` wrappers around `gitDiffAgainst`/`gitHunksAgainst`, which take an arbitrary base ref rather than assuming the working tree's `HEAD`. The one other caller is PR review (`px0 <url>`), which diffs a checked-out PR against its merge-base with the target branch instead. See [GitHub PR Review](github-pr-review.md).
 
-## 9. Stage, Commit, Push, Pull
+## 9. Inspecting a Commit
+
+The git panel's recent commits expand to show what each commit changed, and each changed file opens as a *commit tab*. Both halves only read: nothing here writes to the repository or the working tree.
+
+### Backend (`git_show.go`)
+
+- **Resolving the commit.** `gitResolveCommit` accepts only hex (`^[0-9a-fA-F]{4,64}$`, abbreviated or full, SHA-1 or SHA-256) and confirms it with `git rev-parse --verify --quiet <rev>^{commit}`. Refs, ranges and anything starting with `-` are refused before git sees them. Every later command uses the resolved full hash.
+- **Choosing the base.** A commit is diffed against its first parent. A merge commit is therefore shown as what the merge brought in, and flagged `merge: true`. A root commit has no parent and is diffed against the empty tree (`git hash-object -t tree --stdin`, so the hash matches the repository's object format).
+- **Changed files.** `gitShowCommit` runs `git diff -M -z --name-status` and `--numstat` between base and commit, and `parseCommitFiles` joins them by new path. `-z` keeps unusual filenames intact; a rename or copy carries `oldPath`; numstat's `-`/`-` marks a binary file. The result is cached per `root + full hash` (last 16 commits), which is safe because a commit never changes. The date is strict ISO 8601 (`%cI`) rather than relative, so a cached entry never goes stale; the frontend formats it.
+- **One file's diff.** `gitCommitFileDiff` runs `git diff -M <base> <hash> -- <path> [<oldPath>]`, passing both paths of a rename so `-M` pairs them. Output is read through a 2 MB limit; past it the diff is cut at a line boundary, git is stopped, and the response is marked `truncated`.
+
+| Endpoint | Method | Purpose |
+| --- | --- | --- |
+| `/api/git/show` | GET | `?rev=<hex>` — the commit's full and short hash, subject, body, author, ISO date, parents, `merge`, and `files` (`path`, `oldPath`, `status`, `add`, `del`, `binary`). `400` for a non-hex rev, `404` for an unknown commit or no git. |
+| `/api/git/show/diff` | GET | `?rev=<hex>&path=<p>` — `{path, hunks, truncated}`, or `{binary: true}`, for one file of that commit. `path` must be one of the commit's `files`, a tighter bound than `safePath` that also lets a since-deleted file resolve. `400` otherwise. |
+
+### Frontend
+
+- **Commit rows (`web/src/gitpanel.js`).** Clicking a row expands it; `/api/git/show` is fetched once per commit and cached (in-flight requests are shared). The git status stream re-sends the recent commits on every tick, so the list is only rebuilt when the commits themselves change, and expanded rows are re-expanded from the cache when it is. The hash chip is its own button, so copying never toggles the row. The second click of a double-click (`event.detail === 2`) is ignored and the `dblclick` opens the first file instead.
+- **Commit tabs (`web/src/tabs.js`).** `openCommitFile(commit, file)` creates a doc with `rev` set. There is one tab per commit: another file of the same commit replaces the doc in place. Everything that looks tabs up by path (`openFile`, reopen-closed, `reloadOpenTabs`, session save, history) skips `rev` tabs, so a commit tab never shadows the working-tree tab for the same file and is not restored across sessions.
+- **Diff view (`web/src/diff.js`).** `drawDiff` fetches `/api/git/show/diff` for a `rev` doc. `renderCommitDiff` draws the commit strip (commit, file, position, ‹ › stepping through `setCommitStepHandler`) and then the hunks with `plainLines` set: no line-number navigation, thread buttons, agent ranges or PR markers, since those line numbers belong to the commit, not the file on disk. `setDiffMode('source')` and `toggleDiff` refuse on a commit tab, and the status bar hides the Source button.
+- **Guards elsewhere.** `gitstream.js` leaves `rev` tabs out of auto-close and reload; `wordAtPoint` returns nothing on a commit tab, which turns off hover, links and go-to-definition; `getSelectedRangeInfo` returns nothing for a commit tab's diff, so no edit, thread or ref actions are offered (the browser's own copy still works); the explorer doesn't auto-reveal a commit tab's path.
+
+## 10. Stage, Commit, Push, Pull
 
 The sidebar git panel (`web/src/gitpanel.js`) and the file tree's per-row stage tick (`web/src/tree.js`) are the write half of git integration. Every action is a single explicit HTTP call from a button or tick click; nothing here is triggered by the status watcher, a timer, or a file change.
 

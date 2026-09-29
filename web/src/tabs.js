@@ -14,7 +14,7 @@ import { clearFind } from './find.js';
 import { clearSelectAll } from './selbar.js';
 import { syncPreview, previewing, previewLine } from './markdown.js';
 import { updateProblemsBadge, renderProblemsPane } from './problems.js';
-import { syncDiffView, layoutPref, diffScrollTop, setDiffMode, setSourceJumpHandler, scrollDiffToLine } from './diff.js';
+import { syncDiffView, layoutPref, diffScrollTop, setDiffMode, setSourceJumpHandler, setCommitStepHandler, scrollDiffToLine } from './diff.js';
 import { syncImageView } from './imageview.js';
 
 // Recently closed files, newest last, for Alt+Shift+T.
@@ -73,7 +73,7 @@ export async function openFile(path, opts = {}) {
   const wantsDiff = view === 'diff';
   const wantsSource = view === 'source';
 
-  let idx = S.tabs.findIndex(t => t.path === path);
+  let idx = S.tabs.findIndex(t => t.path === path && !t.rev);
   if (idx < 0) {
     let j;
     const start = line ? Math.max(0, Math.floor((line - 1) / CHUNK) * CHUNK) : 0;
@@ -184,7 +184,7 @@ export async function openFile(path, opts = {}) {
 // through every open path — the backend returns available:false for
 // clean/untracked files, so the extra request is cheap and self-limiting.
 export async function loadGutter(d) {
-  if (!S.meta?.git) return;
+  if (!S.meta?.git || d.rev) return;
   try {
     const j = await api('/api/gutter', { path: d.path });
     d.diffAvailable = !!j.available;
@@ -229,7 +229,7 @@ export async function reloadOpenTabs({ onlyIfChanged = false } = {}) {
     }
   }
 
-  const targets = S.tabs.map(t => ({
+  const targets = S.tabs.filter(t => !t.rev).map(t => ({
     oldDoc: t,
     path: t.path,
     anchor: t.cur || 1,
@@ -383,7 +383,7 @@ function closeTabs(indices) {
   for (const i of indices) {
     const [closed] = S.tabs.splice(i, 1);
     if (!closed) continue;
-    if (closed.path) {
+    if (closed.path && !closed.rev) {
       closedTabs.push({ path: closed.path, cur: closed.cur, scrollTop: closed.scrollTop });
       if (closedTabs.length > MAX_CLOSED) closedTabs.shift();
       evictions.push(api('/api/close', { path: closed.path }));
@@ -443,12 +443,68 @@ export async function reopenClosedTab() {
 
 export function drawTabs() {
   $('#tabs').innerHTML = S.tabs.map((t, i) =>
-    '<div class="tab' + (i === S.active ? ' active' : '') + (t.isImage ? ' tab-image' : '') + (t.deleted ? ' tab-deleted' : '') + '" data-i="' + i + '" title="' + esc(t.path) + '">' +
+    '<div class="tab' + (i === S.active ? ' active' : '') + (t.isImage ? ' tab-image' : '') + (t.rev ? ' tab-commit' : '') + (t.deleted ? ' tab-deleted' : '') + '" data-i="' + i + '" title="' + esc(t.rev ? t.path + ' @ ' + t.rev : t.path) + '">' +
+    (t.rev ? COMMIT_TAB_ICON : '') +
     (t.isImage ? '<svg class="tab-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="2"/><circle cx="5.5" cy="5.5" r="1.5"/><path d="M14 10l-3.5-3.5L3 14"/></svg>' : '') +
     '<span class="tn">' + esc(t.name) + '</span>' +
     '<span class="x" data-close="' + i + '" title="' + withKeys('Close tab ({Alt+W})') + '"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></span></div>').join('');
   const act = $('#tabs .tab.active');
   if (act) act.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+const COMMIT_TAB_ICON = '<svg class="tab-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="2.8"/><line x1="1" y1="8" x2="5.2" y2="8"/><line x1="10.8" y1="8" x2="15" y2="8"/></svg>';
+
+/* Commit tab: one file's diff within a past commit, marked by d.rev. One tab
+   per commit; another file of it swaps in place. It is diff-only, with no
+   source, gutter, LSP or edit actions, because its line numbers are the
+   commit's. Invariant: every lookup of tabs by path must skip rev tabs, or a
+   commit tab shadows the working-tree tab for the same file. */
+export function openCommitFile(commit, file) {
+  if (!commit || !file) return;
+  const prev = doc_();
+  if (prev) prev.scrollTop = vp.scrollTop;
+  const d = {
+    path: file.path, rev: commit.hash, commit, commitFile: file,
+    name: file.path.split('/').pop() + ' @ ' + commit.short,
+    lang: '', total: 0, maxCols: 0, size: 0, lines: [],
+    chunks: new Set(), pending: new Set(), refining: new Set(), scrollTop: 0, cur: 0,
+    outline: null, gen: 0, markdown: false, table: false, isImage: false,
+    deleted: file.status === 'D', gutter: null, lsp: null,
+    diffMode: layoutPref() || 'split', diffAvailable: true, diffDismissed: false, openedInDiffView: true,
+  };
+  const idx = S.tabs.findIndex(t => t.rev === commit.hash);
+  if (idx >= 0) {
+    const cur = S.tabs[idx];
+    if (cur.path === file.path) { if (idx !== S.active) switchTab(idx); return; }
+    d.diffMode = cur.diffMode || d.diffMode;
+    S.tabs[idx] = d;
+    S.active = idx;
+  } else {
+    S.tabs.push(d);
+    S.active = S.tabs.length - 1;
+  }
+  if (prev !== d) { clearSelectAll(); clearFind(); }
+  clearLink();
+  $('#empty').hidden = true;
+  S.at = null;
+  S.lsp.state = 'off'; S.lsp.server = ''; S.lsp.missing = '';
+  syncImageView();
+  syncPreview();
+  syncDiffView();
+  drawTabs(); drawCrumbs(); layout();
+  render(); updateStatus();
+  updateProblemsBadge(d);
+  saveWorkspaceState();
+  emit('tab:activated', { doc: d, prevDoc: prev });
+}
+
+// The commit strip's ‹ ›, registered with diff.js.
+function stepCommitFile(delta) {
+  const d = doc_();
+  if (!d || !d.rev) return;
+  const files = d.commit.files || [];
+  const next = files[files.findIndex(f => f.path === d.path) + delta];
+  if (next) openCommitFile(d.commit, next);
 }
 
 export function switchTab(i) {
@@ -474,7 +530,7 @@ export function switchTab(i) {
   updateProblemsBadge(S.tabs[i]);
   if ($('#pane-right-problems')?.classList.contains('active')) renderProblemsPane();
   if ($('#panel-outline')?.classList.contains('active')) loadOutline();
-  pushHistory(S.tabs[i].path, S.tabs[i].cur);
+  if (!S.tabs[i].rev) pushHistory(S.tabs[i].path, S.tabs[i].cur);
   saveWorkspaceState();
   emit('tab:activated', { doc: S.tabs[i], prevDoc: prev });
 }
@@ -484,8 +540,10 @@ export function saveWorkspaceState() {
   if (saveSessionTimer) clearTimeout(saveSessionTimer);
   saveSessionTimer = setTimeout(async () => {
     try {
-      const tabs = S.tabs.map(t => ({ path: t.path }));
-      await apiPostJson('/api/session', { tabs, active: S.active });
+      // Commit tabs aren't restored.
+      const files = S.tabs.filter(t => !t.rev);
+      const tabs = files.map(t => ({ path: t.path }));
+      await apiPostJson('/api/session', { tabs, active: files.indexOf(doc_()) });
     } catch {}
   }, 200);
 }
@@ -522,6 +580,7 @@ export function hideImage() {
 
 export function initTabs() {
   setSourceJumpHandler(jumpToSourceLine);
+  setCommitStepHandler(stepCommitFile);
   tabMenu = document.createElement('div');
   tabMenu.id = 'tab-menu';
   tabMenu.setAttribute('role', 'menu');

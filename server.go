@@ -137,6 +137,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(s.routePath("/api/git/push"), s.handleGitPush)
 	s.mux.HandleFunc(s.routePath("/api/git/pull"), s.handleGitPull)
 	s.mux.HandleFunc(s.routePath("/api/git/log"), s.handleGitLog)
+	s.mux.HandleFunc(s.routePath("/api/git/show"), s.handleGitShow)
+	s.mux.HandleFunc(s.routePath("/api/git/show/diff"), s.handleGitShowDiff)
 	s.mux.HandleFunc(s.routePath("/api/search"), s.handleSearch)
 	s.mux.HandleFunc(s.routePath("/api/outline"), s.handleOutline)
 	s.mux.HandleFunc(s.routePath("/api/def"), s.handleDef)
@@ -1408,6 +1410,68 @@ func (s *Server) handleGitLog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"commits":    commits,
 		"commitsUrl": commitsURL,
+	})
+}
+
+// showCommit resolves ?rev for the /api/git/show handlers. On failure it has
+// already written the error response and returns nil.
+func (s *Server) showCommit(w http.ResponseWriter, r *http.Request) *CommitDetail {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "method not allowed")
+		return nil
+	}
+	c, err := gitShowCommit(s.ix.Root(), r.URL.Query().Get("rev"))
+	switch {
+	case errors.Is(err, errBadRev):
+		fail(w, http.StatusBadRequest, err.Error())
+		return nil
+	case err != nil:
+		fail(w, http.StatusNotFound, errUnknownCommit.Error())
+		return nil
+	}
+	return c
+}
+
+// handleGitShow returns a commit's metadata and changed files (?rev=<hex>).
+func (s *Server) handleGitShow(w http.ResponseWriter, r *http.Request) {
+	if c := s.showCommit(w, r); c != nil {
+		writeJSON(w, c)
+	}
+}
+
+// handleGitShowDiff returns one file's highlighted diff within a commit
+// (?rev=<hex>&path=<p>). path must be one of the commit's files: tighter than
+// safePath, and a file deleted since still resolves.
+func (s *Server) handleGitShowDiff(w http.ResponseWriter, r *http.Request) {
+	c := s.showCommit(w, r)
+	if c == nil {
+		return
+	}
+	path := r.URL.Query().Get("path")
+	var file *CommitFile
+	for i := range c.Files {
+		if c.Files[i].Path == path {
+			file = &c.Files[i]
+			break
+		}
+	}
+	if file == nil {
+		fail(w, http.StatusBadRequest, "path not changed in this commit")
+		return
+	}
+	if file.Binary {
+		writeJSON(w, map[string]any{"path": path, "binary": true, "hunks": []DiffHunk{}})
+		return
+	}
+	diff, truncated, err := gitCommitFileDiff(s.ix.Root(), c, *file)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "could not read diff")
+		return
+	}
+	writeJSON(w, map[string]any{
+		"path":      path,
+		"hunks":     highlightDiff(path, diff),
+		"truncated": truncated,
 	})
 }
 

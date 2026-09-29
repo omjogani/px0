@@ -605,7 +605,7 @@ export function initTree() {
   });
 
   on('tab:activated', ({ doc }) => {
-    if (!doc || !doc.path || !isAutoRevealEnabled()) return;
+    if (!doc || !doc.path || doc.rev || !isAutoRevealEnabled()) return;
     if (document.body.classList.contains('side-hidden')) return;
     revealFile(doc.path);
   });

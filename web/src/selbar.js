@@ -146,6 +146,8 @@ export function getSelectedRangeInfo() {
 
   const range = sel.getRangeAt(0);
   if (diffviewEl && !diffviewEl.hidden && diffviewEl.contains(range.commonAncestorContainer)) {
+    // Commit tab lines aren't working-tree lines: no actions, native copy only.
+    if (d.rev) return null;
     return diffSelection(range, d);
   }
   if (mdviewEl && !mdviewEl.hidden && mdviewEl.contains(range.commonAncestorContainer)) {
