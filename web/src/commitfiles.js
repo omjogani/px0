@@ -4,9 +4,28 @@
 // rules. Rows are built COMMIT_FILES_PAGE at a time behind a "Show N more" row,
 // so a commit of thousands of files costs no more DOM than one of a hundred
 // until someone asks for more.
-import { esc } from './state.js';
+import { esc, api } from './state.js';
 
 export const COMMIT_FILES_PAGE = 100;
+
+const fileLists = new Map(); // SHA -> CommitFile[] once loaded, or the pending Promise
+
+// A commit's files never change, so each list is fetched once and shared by the
+// sidebar rows and the diff strip.
+export function loadCommitFiles(sha) {
+  const have = fileLists.get(sha);
+  if (have) return Promise.resolve(have);
+  const req = api('/api/commitfiles', { sha }).then(
+    j => { const files = j.files || []; fileLists.set(sha, files); return files; },
+    e => { fileLists.delete(sha); throw e; });
+  fileLists.set(sha, req);
+  return req;
+}
+
+export function cachedCommitFiles(sha) {
+  const have = fileLists.get(sha);
+  return Array.isArray(have) ? have : null;
+}
 
 /* git's name-status letter -> the badge classes the file tree already uses, so
    a commit's file list reads the same as the working-tree one. */

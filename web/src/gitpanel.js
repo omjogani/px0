@@ -13,7 +13,7 @@ import { layout, render } from './renderer.js';
 import { refreshUnpushed } from './unpushed.js';
 import { openFile } from './tabs.js';
 import { on } from './bus.js';
-import { commitFileRows, COMMIT_FILES_PAGE } from './commitfiles.js';
+import { commitFileRows, COMMIT_FILES_PAGE, loadCommitFiles, cachedCommitFiles } from './commitfiles.js';
 
 const panel = () => $('#git-panel');
 
@@ -532,7 +532,6 @@ async function handleSeeAllCommits(e) {
    A file opens as a tab pinned to the commit (openFile's ref), the same as
    the Unpushed section; the rows themselves come from commitfiles.js. */
 
-const commitFiles = new Map(); // full SHA -> CommitFile[], or a pending Promise
 const listedCommits = new Map(); // full SHA -> GitCommit, for the expanded meta line
 const expandedCommits = new Set();
 let renderedCommitsKey = '';
@@ -575,21 +574,6 @@ function commitEl(sha) {
   return $('#git-commits-list')?.querySelector(`.git-commit[data-sha="${CSS.escape(sha)}"]`);
 }
 
-async function loadCommitFiles(sha) {
-  const have = commitFiles.get(sha);
-  if (have) return have;
-  const req = api('/api/commitfiles', { sha }).then(j => j.files || []);
-  commitFiles.set(sha, req);
-  try {
-    const files = await req;
-    commitFiles.set(sha, files);
-    return files;
-  } catch (e) {
-    commitFiles.delete(sha);
-    throw e;
-  }
-}
-
 async function setCommitExpanded(el, open) {
   const sha = el.dataset.sha;
   const row = el.querySelector('.git-commit-row');
@@ -603,8 +587,8 @@ async function setCommitExpanded(el, open) {
     return;
   }
   expandedCommits.add(sha);
-  const cached = commitFiles.get(sha);
-  if (cached && !(cached instanceof Promise)) { drawCommitFiles(body, sha, cached); return; }
+  const cached = cachedCommitFiles(sha);
+  if (cached) { drawCommitFiles(body, sha, cached); return; }
   body.innerHTML = '<div class="git-commit-note">Loading…</div>';
   try {
     const files = await loadCommitFiles(sha);
@@ -634,8 +618,8 @@ function appendCommitFiles(body, sha, files) {
 }
 
 function showMoreCommitFiles(el) {
-  const files = commitFiles.get(el.dataset.sha);
-  if (!files || files instanceof Promise) return -1;
+  const files = cachedCommitFiles(el.dataset.sha);
+  if (!files) return -1;
   return appendCommitFiles(el.querySelector('.git-commit-files'), el.dataset.sha, files);
 }
 

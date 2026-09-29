@@ -1557,6 +1557,21 @@ func TestGitCommitFilesLineCounts(t *testing.T) {
 	if f := byPath["img.bin"]; !f.Binary || f.Add != 0 || f.Del != 0 {
 		t.Errorf("binary: got %+v, want binary with no line counts", f)
 	}
+
+	// A merge counts only what it brought in against its first parent.
+	gitTestRun(t, dir, "checkout", "-q", "-b", "side")
+	os.WriteFile(filepath.Join(dir, "side.txt"), []byte("a\nb\n"), 0o644)
+	gitTestRun(t, dir, "add", "-A")
+	gitTestRun(t, dir, "commit", "-qm", "side work")
+	gitTestRun(t, dir, "checkout", "-q", "main")
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed on main\n"), 0o644)
+	gitTestRun(t, dir, "commit", "-qam", "main work")
+	gitTestRun(t, dir, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+	merge := strings.TrimSpace(gitTestRun(t, dir, "rev-parse", "HEAD"))
+	stats := gitCommitNumstat(dir, merge)
+	if len(stats) != 1 || stats["side.txt"] != (numstat{add: 2}) {
+		t.Errorf("merge numstat: got %+v, want only side.txt +2", stats)
+	}
 }
 
 func TestGitDiffCommitIsFrozenAgainstTheWorkingTree(t *testing.T) {

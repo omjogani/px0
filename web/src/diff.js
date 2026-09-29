@@ -12,7 +12,7 @@ import { wordAtPoint } from './cursor.js';
 import { gotoDefinition } from './lsp.js';
 import { hoverAt } from './hover.js';
 import { pushHistory } from './history.js';
-import { COMMIT_STATUS } from './commitfiles.js';
+import { COMMIT_STATUS, loadCommitFiles, cachedCommitFiles } from './commitfiles.js';
 
 export const diffview = $('#diffview');
 const diffContent = $('#diffcontent');
@@ -302,8 +302,6 @@ export function setSourceJumpHandler(fn) { sourceJumpHandler = fn; }
 let commitStepHandler = null;
 export function setCommitStepHandler(fn) { commitStepHandler = fn; }
 
-const commitFileLists = new Map(); // SHA -> CommitFile[] (a commit's files never change)
-
 // The nearest file from i in direction dir that can be opened: binary files
 // have no text diff and /api/file refuses them, so stepping passes over them.
 function commitStepTarget(files, i, dir) {
@@ -332,15 +330,9 @@ function commitStrip(d) {
       '<button type="button" class="dcs-step" data-commit-step="1" title="Next file in this commit"' + (commitStepTarget(files, i, 1) < 0 ? ' disabled' : '') + '>›</button>';
     el.dataset.i = i;
   };
-  const sha = d.diffRef;
-  const have = commitFileLists.get(sha);
+  const have = cachedCommitFiles(d.diffRef);
   if (have) fill(have);
-  else {
-    api('/api/commitfiles', { sha }).then(j => {
-      commitFileLists.set(sha, j.files || []);
-      if (el.isConnected || doc_() === d) fill(j.files || []);
-    }).catch(() => el.remove());
-  }
+  else loadCommitFiles(d.diffRef).then(files => { if (el.isConnected || doc_() === d) fill(files); }, () => el.remove());
   return el;
 }
 
@@ -574,7 +566,7 @@ export function initDiff() {
     const step = e.target.closest('[data-commit-step]');
     if (step) {
       const d = doc_();
-      const files = d && commitFileLists.get(d.diffRef);
+      const files = d && cachedCommitFiles(d.diffRef);
       const next = files?.[commitStepTarget(files, +step.closest('.diff-commit-strip').dataset.i, +step.dataset.commitStep)];
       if (!step.disabled && next && commitStepHandler) commitStepHandler(d, next);
       return;
