@@ -426,6 +426,12 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
 .gcf-add { color: var(--gi); }
 .gcf-del { color: var(--gd); }
 .gcf-bin { color: var(--faint); }
+.git-commit-more {
+  padding: 2px 6px; border-radius: var(--r);
+  font: 11px/1.4 var(--ui); color: var(--dim); cursor: pointer; user-select: none;
+}
+.git-commit-more:hover { background: var(--bg3); color: var(--accent); }
+.git-commit-more:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .git-see-all-wrap {
   padding: 3px 6px 2px;
 }

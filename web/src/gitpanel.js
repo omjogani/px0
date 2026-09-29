@@ -578,7 +578,11 @@ async function setCommitExpanded(el, open) {
   el.classList.toggle('expanded', open);
   row.setAttribute('aria-expanded', String(open));
   body.hidden = !open;
-  if (!open) { expandedCommits.delete(hash); return; }
+  if (!open) {
+    expandedCommits.delete(hash);
+    body.replaceChildren(); // hiding would keep every row in memory
+    return;
+  }
   expandedCommits.add(hash);
   const cached = commitDetails.get(hash);
   if (cached && !(cached instanceof Promise)) { drawCommitFiles(body, cached); return; }
@@ -591,6 +595,9 @@ async function setCommitExpanded(el, open) {
   }
 }
 
+// File rows are built a page at a time, only while the commit is expanded.
+const COMMIT_FILES_PAGE = 100;
+
 function drawCommitFiles(body, c) {
   const meta = `<div class="git-commit-meta">${esc(c.author)} · <span title="${esc(c.date)}">${esc(relTime(c.date))}</span>` +
     (c.merge ? ' · <span title="Changes are shown against the first parent">merge</span>' : '') + '</div>';
@@ -598,21 +605,44 @@ function drawCommitFiles(body, c) {
     body.innerHTML = meta + '<div class="git-commit-note">No file changes</div>';
     return;
   }
-  body.innerHTML = meta + c.files.map((f, i) => {
-    const slash = f.path.lastIndexOf('/');
-    const name = f.path.slice(slash + 1);
-    const dir = slash > 0 ? f.path.slice(0, slash) : '';
-    const title = (f.oldPath ? f.oldPath + ' → ' : '') + f.path + ' (' + (COMMIT_STATUS_NAMES[f.status] || f.status) + ')';
-    const stat = f.binary
-      ? '<span class="gcf-bin">bin</span>'
-      : (f.add ? `<span class="gcf-add">+${f.add}</span>` : '') + (f.del ? `<span class="gcf-del">−${f.del}</span>` : '');
-    return `<div class="git-commit-file" data-i="${i}" tabindex="0" role="button" title="${esc(title)}">` +
-      `<span class="gcf-st gcf-st-${esc(f.status)}">${esc(f.status)}</span>` +
-      `<span class="gcf-name">${esc(name)}</span>` +
-      `<span class="gcf-dir">${esc(dir)}</span>` +
-      `<span class="gcf-stat">${stat}</span></div>`;
-  }).join('');
+  body.innerHTML = meta;
+  appendCommitFiles(body, c);
+}
+
+function appendCommitFiles(body, c) {
+  const from = body.querySelectorAll('.git-commit-file').length;
+  const to = Math.min(c.files.length, from + COMMIT_FILES_PAGE);
+  body.querySelector('.git-commit-more')?.remove();
+  body.insertAdjacentHTML('beforeend', c.files.slice(from, to).map((f, k) => commitFileRow(f, from + k)).join(''));
+  const left = c.files.length - to;
+  if (left > 0) {
+    body.insertAdjacentHTML('beforeend', `<div class="git-commit-more" tabindex="0" role="button">` +
+      `Show ${Math.min(left, COMMIT_FILES_PAGE)} more · ${left.toLocaleString()} remaining</div>`);
+  }
   markActiveCommitFile();
+  return from;
+}
+
+function commitFileRow(f, i) {
+  const slash = f.path.lastIndexOf('/');
+  const name = f.path.slice(slash + 1);
+  const dir = slash > 0 ? f.path.slice(0, slash) : '';
+  const title = (f.oldPath ? f.oldPath + ' → ' : '') + f.path + ' (' + (COMMIT_STATUS_NAMES[f.status] || f.status) + ')';
+  const stat = f.binary
+    ? '<span class="gcf-bin">bin</span>'
+    : (f.add ? `<span class="gcf-add">+${f.add}</span>` : '') + (f.del ? `<span class="gcf-del">−${f.del}</span>` : '');
+  return `<div class="git-commit-file" data-i="${i}" tabindex="0" role="button" title="${esc(title)}">` +
+    `<span class="gcf-st gcf-st-${esc(f.status)}">${esc(f.status)}</span>` +
+    `<span class="gcf-name">${esc(name)}</span>` +
+    `<span class="gcf-dir">${esc(dir)}</span>` +
+    `<span class="gcf-stat">${stat}</span></div>`;
+}
+
+// Returns the index of the first row added, or -1 if the commit isn't loaded.
+function showMoreCommitFiles(el) {
+  const c = commitDetails.get(el.dataset.hash);
+  if (!c || c instanceof Promise) return -1;
+  return appendCommitFiles(el.querySelector('.git-commit-files'), c);
 }
 
 async function openCommitAt(el, index) {
@@ -666,6 +696,8 @@ function initCommitList() {
       copyToClipboard(sha.textContent, 'Copied ' + sha.textContent, sha);
       return;
     }
+    const more = e.target.closest('.git-commit-more');
+    if (more) { showMoreCommitFiles(more.closest('.git-commit')); return; }
     const file = e.target.closest('.git-commit-file');
     if (file) { openCommitAt(file.closest('.git-commit'), +file.dataset.i); return; }
     const row = e.target.closest('.git-commit-row');
@@ -683,11 +715,17 @@ function initCommitList() {
     openCommitAt(el, 0);
   });
   list.addEventListener('keydown', e => {
-    const item = e.target.closest('.git-commit-row, .git-commit-file');
+    const item = e.target.closest('.git-commit-row, .git-commit-file, .git-commit-more');
     if (!item) return;
     const el = item.closest('.git-commit');
     const isRow = item.classList.contains('git-commit-row');
-    const items = [...list.querySelectorAll('.git-commit-row, .git-commit.expanded .git-commit-file')];
+    if (item.classList.contains('git-commit-more') && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      const first = showMoreCommitFiles(el);
+      el.querySelector(`.git-commit-file[data-i="${first}"]`)?.focus();
+      return;
+    }
+    const items = [...list.querySelectorAll('.git-commit-row, .git-commit.expanded .git-commit-file, .git-commit.expanded .git-commit-more')];
     const at = items.indexOf(item);
     switch (e.key) {
       case 'ArrowDown': items[at + 1]?.focus(); break;
