@@ -13,8 +13,6 @@ export const WORD = /[A-Za-z0-9_$]/;
    to place an LSP request. Walking text nodes keeps this correct even after
    find or occurrence marks have wrapped parts of the line. */
 export function wordAtPoint(x, y) {
-  // Commit tabs (d.rev) show old code: no hover, links or go-to-definition.
-  if (doc_()?.rev) return null;
   let node, off;
   if (document.caretPositionFromPoint) {
     const p = document.caretPositionFromPoint(x, y);

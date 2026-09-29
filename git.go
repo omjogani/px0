@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -526,7 +527,12 @@ func gitMergeBase(root, a, b string) string {
 // against base (clean/untracked). base is "HEAD" for the working-tree
 // gutter, or a PR's merge-base in review mode (server.go's diffBase).
 func gitHunksAgainst(root, relpath, base string) (added, modified, deleted []int) {
-	diff := gitDiffAgainst(root, relpath, base)
+	return parseDiffHunks(gitDiffAgainst(root, relpath, base))
+}
+
+// parseDiffHunks is gitHunksAgainst's body, split out so a commit's own diff
+// (gitDiffCommit) can feed the same gutter parser as a diff against a ref.
+func parseDiffHunks(diff string) (added, modified, deleted []int) {
 	if diff == "" {
 		return nil, nil, nil
 	}
@@ -594,6 +600,7 @@ func parseNewStart(hdr string) int {
 // GitCommit represents a single commit in git log.
 type GitCommit struct {
 	Hash    string `json:"hash"`
+	Full    string `json:"full"` // full SHA, what a pinned tab's ref is
 	Subject string `json:"subject"`
 	Author  string `json:"author"`
 	Date    string `json:"date"`
@@ -604,7 +611,7 @@ func gitRecentCommits(root string, count int) []GitCommit {
 	if count <= 0 {
 		count = 5
 	}
-	out, err := exec.Command("git", "-C", root, "log", fmt.Sprintf("-n%d", count), "--format=%h%x1f%s%x1f%an%x1f%cr").Output()
+	out, err := exec.Command("git", "-C", root, "log", fmt.Sprintf("-n%d", count), "--format=%h%x1f%s%x1f%an%x1f%cr%x1f%H").Output()
 	if err != nil {
 		return []GitCommit{}
 	}
@@ -628,9 +635,373 @@ func gitRecentCommits(root string, count int) []GitCommit {
 		if len(parts) > 3 {
 			c.Date = parts[3]
 		}
+		if len(parts) > 4 {
+			c.Full = parts[4]
+		}
 		commits = append(commits, c)
 	}
 	return commits
+}
+
+/* ---------- unpushed commits (@{u}..HEAD) ----------
+
+   Everything below reads commits that exist locally but not on the tracking
+   branch, so they can be reviewed in px0 before they are pushed. All of it is
+   strictly read-only and fails quiet: no upstream, no git, or a bad SHA all
+   yield an empty result rather than an error, and the sidebar section simply
+   doesn't appear. */
+
+// UnpushedCommit is one commit in @{u}..HEAD, newest first.
+type UnpushedCommit struct {
+	Hash    string `json:"hash"`    // full SHA, what every follow-up call passes back
+	Short   string `json:"short"`   // abbreviated SHA for display
+	Subject string `json:"subject"` // first line of the message
+	Author  string `json:"author"`
+	Date    string `json:"date"` // relative ("2 hours ago")
+}
+
+// CommitFile is one path a commit touched, with git's name-status letter
+// (M/A/D/R/C/T) -- the same alphabet the file tree badges working-tree changes
+// with, so the commit's file list reads identically.
+type CommitFile struct {
+	Path   string `json:"path"`
+	Status string `json:"status"`
+	From   string `json:"from,omitempty"` // previous path, for R/C only
+	Add    int    `json:"add"`
+	Del    int    `json:"del"`
+	Binary bool   `json:"binary,omitempty"` // numstat reports "-" for its line counts
+}
+
+// CommitDetail is everything the commit hover card shows: who wrote it, the
+// full message, and its diffstat.
+type CommitDetail struct {
+	Hash       string `json:"hash"`
+	Short      string `json:"short"`
+	Subject    string `json:"subject"`
+	Message    string `json:"message"` // full message, subject line included
+	Author     string `json:"author"`
+	Email      string `json:"email"`
+	Date       string `json:"date"`    // relative
+	DateISO    string `json:"dateIso"` // exact, for the title attribute
+	Files      int    `json:"files"`
+	Insertions int    `json:"insertions"`
+	Deletions  int    `json:"deletions"`
+	AuthorURL  string `json:"authorUrl,omitempty"` // best-effort GitHub profile/search link
+	CommitURL  string `json:"commitUrl,omitempty"`
+}
+
+// shaRe bounds what reaches git as a revision. Every SHA the frontend sends
+// came from a list px0 itself produced, so anything else is a bug or a probe;
+// refusing it keeps a crafted "--upload-pack=..." out of an exec argument.
+var shaRe = regexp.MustCompile(`^[0-9a-fA-F]{4,40}$`)
+
+func validSHA(sha string) bool { return shaRe.MatchString(sha) }
+
+// gitUpstreamRef returns the tracking branch HEAD is configured to push to, as
+// git names it ("origin/master"), or "" when none is configured. Unlike
+// gitAheadBehind there is no origin/<branch> fallback: an unpushed list is
+// only meaningful against a branch git itself considers upstream, and guessing
+// one would quietly measure against the wrong ref.
+func gitUpstreamRef(root string) string {
+	if !gitAvailable(root) {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// gitUnpushedCommits lists the commits in @{u}..HEAD, newest first, along with
+// the upstream ref they are measured against. Both are empty when no upstream
+// is configured or nothing is ahead.
+func gitUnpushedCommits(root string, limit int) (upstream string, commits []UnpushedCommit) {
+	upstream = gitUpstreamRef(root)
+	if upstream == "" {
+		return "", nil
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	out, err := exec.Command("git", "-C", root, "log", fmt.Sprintf("-n%d", limit),
+		"--format=%H%x1f%h%x1f%s%x1f%an%x1f%cr", "@{u}..HEAD").Output()
+	if err != nil {
+		return upstream, nil
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		f := strings.Split(line, "\x1f")
+		c := UnpushedCommit{Hash: f[0]}
+		if len(f) > 1 {
+			c.Short = f[1]
+		}
+		if len(f) > 2 {
+			c.Subject = f[2]
+		}
+		if len(f) > 3 {
+			c.Author = f[3]
+		}
+		if len(f) > 4 {
+			c.Date = f[4]
+		}
+		commits = append(commits, c)
+	}
+	return upstream, commits
+}
+
+// commitDiffArgs are the diff-tree flags every per-commit read shares: the
+// commit's own change against its first parent (--root so the very first
+// commit still has one to show), one entry per path rather than per tree.
+var commitDiffArgs = []string{"--no-commit-id", "-r", "-m", "--first-parent", "--root"}
+
+// gitCommitFiles lists the paths a commit touched, relative to the served
+// root. Paths outside root's subtree are dropped, the same way gitStatusAgainst
+// drops them, so a repo served from a subdirectory lists only what it can open.
+func gitCommitFiles(root, sha string) []CommitFile {
+	info := gitProbe(root)
+	if !info.ok || !validSHA(sha) {
+		return nil
+	}
+	args := append([]string{"-C", root, "diff-tree", "--name-status", "-z"}, commitDiffArgs...)
+	out, err := exec.Command("git", append(args, sha)...).Output()
+	if err != nil {
+		return nil
+	}
+	stats := gitCommitNumstat(root, sha)
+	key := repoRelKey(info, root)
+	var files []CommitFile
+	// -z name-status emits "<status>\0<path>\0", or "<status>\0<src>\0<dst>\0"
+	// for a rename or copy, so the field count per record varies.
+	fields := strings.Split(string(out), "\x00")
+	for i := 0; i < len(fields); i++ {
+		st := fields[i]
+		if st == "" {
+			continue
+		}
+		letter := st[:1]
+		rename := letter == "R" || letter == "C"
+		if i+1 >= len(fields) {
+			break
+		}
+		from, to := "", fields[i+1]
+		i++
+		if rename {
+			if i+1 >= len(fields) {
+				break
+			}
+			from, to = to, fields[i+1]
+			i++
+		}
+		path, ok := key(to)
+		if !ok {
+			continue
+		}
+		ns := stats[to]
+		f := CommitFile{Path: path, Status: letter, Add: ns.add, Del: ns.del, Binary: ns.binary}
+		if from != "" {
+			if fp, ok := key(from); ok {
+				f.From = fp
+			}
+		}
+		files = append(files, f)
+	}
+	return files
+}
+
+type numstat struct {
+	add, del int
+	binary   bool
+}
+
+// gitCommitNumstat returns each path's line counts in a commit, keyed by the
+// repo-relative path diff-tree reports (the new path for a rename). In -z form
+// a rename is "add\tdel\t\0old\0new\0"; anything else is "add\tdel\tpath\0".
+func gitCommitNumstat(root, sha string) map[string]numstat {
+	args := append([]string{"-C", root, "diff-tree", "--numstat", "-z"}, commitDiffArgs...)
+	out, err := exec.Command("git", append(args, sha)...).Output()
+	if err != nil {
+		return nil
+	}
+	stats := map[string]numstat{}
+	toks := strings.Split(string(out), "\x00")
+	for i := 0; i < len(toks); {
+		f := strings.SplitN(toks[i], "\t", 3)
+		i++
+		if len(f) < 3 {
+			continue
+		}
+		path := f[2]
+		if path == "" { // rename or copy: old and new follow as their own tokens
+			if i+1 >= len(toks) {
+				break
+			}
+			path = toks[i+1]
+			i += 2
+		}
+		st := numstat{binary: f[0] == "-" && f[1] == "-"}
+		st.add, _ = strconv.Atoi(f[0])
+		st.del, _ = strconv.Atoi(f[1])
+		stats[path] = st
+	}
+	return stats
+}
+
+// gitCommitDetail reads a commit's metadata and diffstat for the hover card.
+// ok is false for an unknown or malformed SHA.
+func gitCommitDetail(root, sha string) (CommitDetail, bool) {
+	if !gitAvailable(root) || !validSHA(sha) {
+		return CommitDetail{}, false
+	}
+	// %B is last: it spans lines, so everything past the final separator is it.
+	out, err := exec.Command("git", "-C", root, "show", "-s",
+		"--format=%H%x1f%h%x1f%an%x1f%ae%x1f%cr%x1f%cI%x1f%s%x1f%B", sha).Output()
+	if err != nil {
+		return CommitDetail{}, false
+	}
+	f := strings.SplitN(string(out), "\x1f", 8)
+	if len(f) < 8 {
+		return CommitDetail{}, false
+	}
+	d := CommitDetail{
+		Hash: f[0], Short: f[1], Author: f[2], Email: f[3],
+		Date: f[4], DateISO: f[5], Subject: f[6],
+		Message: strings.TrimRight(f[7], "\n"),
+	}
+	d.Files, d.Insertions, d.Deletions = gitCommitStat(root, sha)
+	d.AuthorURL = githubAuthorURL(root, d.Email, d.Author)
+	d.CommitURL = gitCommitWebURL(root, d.Hash)
+	return d, true
+}
+
+// gitCommitStat sums a commit's numstat into files/insertions/deletions.
+// Binary files count toward files but contribute no line counts, which is what
+// git's own "--shortstat" does.
+func gitCommitStat(root, sha string) (files, insertions, deletions int) {
+	if !validSHA(sha) {
+		return 0, 0, 0
+	}
+	args := append([]string{"-C", root, "diff-tree", "--numstat"}, commitDiffArgs...)
+	out, err := exec.Command("git", append(args, sha)...).Output()
+	if err != nil {
+		return 0, 0, 0
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		files++
+		if add, err := strconv.Atoi(parts[0]); err == nil { // "-" for binary
+			insertions += add
+		}
+		if del, err := strconv.Atoi(parts[1]); err == nil {
+			deletions += del
+		}
+	}
+	return files, insertions, deletions
+}
+
+// gitDiffCommit returns the unified diff a single commit made to relpath --
+// the commit against its first parent, or against the empty tree for a root
+// commit. This is the ref form of gitDiffAgainst: the working tree isn't
+// involved at all, so the result is frozen no matter what is edited since.
+func gitDiffCommit(root, relpath, sha string) string {
+	if !gitAvailable(root) || !validSHA(sha) {
+		return ""
+	}
+	args := append([]string{"-C", root, "diff-tree", "-p", "--no-color"}, commitDiffArgs...)
+	args = append(args, sha, "--", relpath)
+	out, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// gitHunksCommit is gitHunksAgainst for a single commit's own diff.
+func gitHunksCommit(root, relpath, sha string) (added, modified, deleted []int) {
+	return parseDiffHunks(gitDiffCommit(root, relpath, sha))
+}
+
+// remoteHostPath splits a remote URL -- in any of git's spellings -- into its
+// host and "owner/repo" path. ok is false for a local path or anything it
+// can't recognise.
+func remoteHostPath(raw string) (host, path string, ok bool) {
+	raw = strings.TrimSuffix(raw, ".git")
+	switch {
+	case strings.HasPrefix(raw, "git@"): // git@host:owner/repo
+		h, p, found := strings.Cut(raw[4:], ":")
+		if !found {
+			return "", "", false
+		}
+		return h, strings.TrimPrefix(p, "/"), true
+	case strings.HasPrefix(raw, "ssh://"): // ssh://git@host/owner/repo
+		clean := strings.TrimPrefix(raw, "ssh://")
+		if i := strings.Index(clean, "@"); i >= 0 {
+			clean = clean[i+1:]
+		}
+		h, p, found := strings.Cut(clean, "/")
+		if !found {
+			return "", "", false
+		}
+		return h, p, true
+	case strings.HasPrefix(raw, "http://"), strings.HasPrefix(raw, "https://"):
+		u, err := url.Parse(raw)
+		if err != nil {
+			return "", "", false
+		}
+		u.User = nil // strip user:token if any
+		return u.Host, strings.TrimPrefix(u.Path, "/"), true
+	}
+	return "", "", false
+}
+
+// gitCommitWebURL returns a web URL for one commit on GitHub/GitLab/Bitbucket,
+// or "" when the remote isn't one of those.
+func gitCommitWebURL(root, sha string) string {
+	host, path, ok := remoteHostPath(gitRemoteURL(root, gitCurrentBranch(root)))
+	if !ok || path == "" {
+		return ""
+	}
+	if strings.Contains(host, "gitlab") {
+		return fmt.Sprintf("https://%s/%s/-/commit/%s", host, path, sha)
+	}
+	return fmt.Sprintf("https://%s/%s/commit/%s", host, path, sha)
+}
+
+// githubAuthorURL guesses a GitHub page for a commit author. A
+// users.noreply.github.com address carries the login outright, so that becomes
+// a profile link; otherwise the best that can be said from a commit alone is
+// "this repo's commits by this address", which is at least always right about
+// who it means. Non-GitHub remotes get nothing.
+func githubAuthorURL(root, email, name string) string {
+	host, path, ok := remoteHostPath(gitRemoteURL(root, gitCurrentBranch(root)))
+	if !ok || path == "" || !strings.Contains(host, "github") {
+		return ""
+	}
+	if login, _, found := strings.Cut(email, "@"); found && strings.HasSuffix(email, "users.noreply.github.com") {
+		// "12345+octocat@users.noreply.github.com" and the older "octocat@..."
+		if _, after, hasID := strings.Cut(login, "+"); hasID {
+			login = after
+		}
+		if login != "" {
+			return "https://" + host + "/" + url.PathEscape(login)
+		}
+	}
+	q := email
+	if q == "" {
+		q = name
+	}
+	if q == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://%s/%s/commits?author=%s", host, path, url.QueryEscape(q))
 }
 
 // gitHeadCommit returns the abbreviated or full HEAD commit hash.
@@ -662,72 +1033,16 @@ func gitRemoteURL(root, branch string) string {
 
 // gitCommitsWebURL returns a web URL to view commits on GitHub/GitLab/Bitbucket if configured.
 func gitCommitsWebURL(root, branch string) string {
-	raw := gitRemoteURL(root, branch)
-	if raw == "" {
+	host, path, ok := remoteHostPath(gitRemoteURL(root, branch))
+	if !ok || path == "" {
 		return ""
 	}
-	raw = strings.TrimSuffix(raw, ".git")
-
-	// git@host:owner/repo
-	if strings.HasPrefix(raw, "git@") {
-		parts := strings.SplitN(raw[4:], ":", 2)
-		if len(parts) == 2 {
-			host := parts[0]
-			path := strings.TrimPrefix(parts[1], "/")
-			if strings.Contains(host, "gitlab") {
-				if branch != "" && branch != "HEAD" {
-					return fmt.Sprintf("https://%s/%s/-/commits/%s", host, path, branch)
-				}
-				return fmt.Sprintf("https://%s/%s/-/commits", host, path)
-			}
-			if branch != "" && branch != "HEAD" {
-				return fmt.Sprintf("https://%s/%s/commits/%s", host, path, branch)
-			}
-			return fmt.Sprintf("https://%s/%s/commits", host, path)
-		}
+	seg := "commits"
+	if strings.Contains(host, "gitlab") {
+		seg = "-/commits"
 	}
-
-	// ssh://git@host/owner/repo
-	if strings.HasPrefix(raw, "ssh://") {
-		clean := strings.TrimPrefix(raw, "ssh://")
-		if idx := strings.Index(clean, "@"); idx >= 0 {
-			clean = clean[idx+1:]
-		}
-		parts := strings.SplitN(clean, "/", 2)
-		if len(parts) == 2 {
-			host := parts[0]
-			path := parts[1]
-			if strings.Contains(host, "gitlab") {
-				if branch != "" && branch != "HEAD" {
-					return fmt.Sprintf("https://%s/%s/-/commits/%s", host, path, branch)
-				}
-				return fmt.Sprintf("https://%s/%s/-/commits", host, path)
-			}
-			if branch != "" && branch != "HEAD" {
-				return fmt.Sprintf("https://%s/%s/commits/%s", host, path, branch)
-			}
-			return fmt.Sprintf("https://%s/%s/commits", host, path)
-		}
+	if branch != "" && branch != "HEAD" {
+		return fmt.Sprintf("https://%s/%s/%s/%s", host, path, seg, branch)
 	}
-
-	// https:// or http://
-	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
-		u, err := url.Parse(raw)
-		if err == nil {
-			u.User = nil // Strip user:token if any
-			path := strings.TrimPrefix(strings.TrimSuffix(u.Path, ".git"), "/")
-			if strings.Contains(u.Host, "gitlab") {
-				if branch != "" && branch != "HEAD" {
-					return fmt.Sprintf("https://%s/%s/-/commits/%s", u.Host, path, branch)
-				}
-				return fmt.Sprintf("https://%s/%s/-/commits", u.Host, path)
-			}
-			if branch != "" && branch != "HEAD" {
-				return fmt.Sprintf("https://%s/%s/commits/%s", u.Host, path, branch)
-			}
-			return fmt.Sprintf("https://%s/%s/commits", u.Host, path)
-		}
-	}
-
-	return ""
+	return fmt.Sprintf("https://%s/%s/%s", host, path, seg)
 }

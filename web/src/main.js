@@ -5,7 +5,7 @@ import { initTabs, openFile, restoreWorkspaceTabs, switchTab } from './tabs.js';
 import { initCursor } from './cursor.js';
 import { initHover } from './hover.js';
 import { initSelectionBar } from './selbar.js';
-import { drawTree, treeEl, initTree, revealFile, refreshTree, restoreOpenDirs, setSidebarMode, updateSidebarToggleState } from './tree.js';
+import { drawTree, treeEl, initTree, revealFile, refreshTree, restoreOpenDirs, setSidebarMode, updateSidebarToggleState, hasGitView } from './tree.js';
 import { initSearch } from './search.js';
 import { initOutline } from './outline.js';
 import { initPanels } from './panels.js';
@@ -28,6 +28,7 @@ import { initGitPanel } from './gitpanel.js';
 import { initPR } from './pr.js';
 import { initLineComment } from './linecomment.js';
 import { initProblems } from './problems.js';
+import { initUnpushed, refreshUnpushed } from './unpushed.js';
 
 // Initialize all subsystems
 initRenderer();
@@ -57,6 +58,7 @@ initVim();
 initImageViewer();
 initLineComment();
 initProblems();
+initUnpushed();
 
 // Bootstrap application lifecycle
 (async function boot() {
@@ -118,13 +120,12 @@ initProblems();
   // completes (common right after `px0 <pr-url>`) would otherwise never
   // auto-select a diff tab -- until the next manual reload.
   const applyGitSidebarState = async () => {
-    const hasGitChanges = !!(S.meta?.git && S.meta.gitChanges > 0);
-    if (hasGitChanges) {
-      await setSidebarMode('git');
-    } else {
-      await setSidebarMode('files');
-    }
-    return hasGitChanges;
+    // The unpushed list decides this too: a clean tree with local commits
+    // still belongs in Git view, which is the only place they are listed.
+    await refreshUnpushed();
+    const showGit = hasGitView();
+    await setSidebarMode(showGit ? 'git' : 'files');
+    return !!(S.meta?.git && S.meta.gitChanges > 0);
   };
   const selectChangedFileTab = async () => {
     if (S.tabs[S.active]?.diffAvailable) return;

@@ -3,7 +3,7 @@ import { $, $$, esc, api, apiPost, apiPostJson, S } from './state.js';
 import { openFile } from './tabs.js';
 import { showToast, copyToClipboard } from './ui.js';
 import { closeSelMenu } from './selbar.js';
-import { on } from './bus.js';
+import { emit, on } from './bus.js';
 import { isAutoRevealEnabled } from './settings.js';
 
 export const treeEl = $('#tree');
@@ -398,24 +398,42 @@ export async function patchTreeGitStatus(statuses = {}, dirtyDirs = {}, staged =
   }
 
   // If in changed-only mode, auto-expand any newly dirty directories
+  markTreeCleanState();
   if (treeEl.classList.contains('changed-only')) {
     await expandDirtyDirs();
   }
 }
 
+/* Whether the Git view has anything to show. Unpushed commits count: once you
+   commit, the working tree goes clean but the commits are still unreviewed, and
+   the Unpushed section under the tree (unpushed.js, which owns S.unpushedCount)
+   is exactly where they show up. */
+/* In Git view with a clean working tree the tree renders nothing (every row is
+   filtered out), so it stops claiming the sidebar's spare height and says why.
+   The Unpushed section below it is then the whole of the view. */
+function markTreeCleanState() {
+  treeEl.classList.toggle('no-changes',
+    treeEl.classList.contains('changed-only') && !(S.meta?.gitChanges > 0));
+}
+
+export function hasGitView() {
+  return !!(S.meta?.git && ((S.meta.gitChanges > 0) || (S.unpushedCount > 0)));
+}
+
 export function updateSidebarToggleState() {
   const btnChanged = $('#btn-changed');
-  const hasGitChanges = !!(S.meta?.git && S.meta.gitChanges > 0);
-  if (btnChanged) {
-    btnChanged.disabled = !hasGitChanges;
-    btnChanged.classList.toggle('disabled', !hasGitChanges);
-    if (!S.meta?.git) {
-      btnChanged.title = 'Git not available in workspace';
-    } else if (!hasGitChanges) {
-      btnChanged.title = 'There are no git modified files.';
-    } else {
-      btnChanged.title = 'Git changes (show changed files only)';
-    }
+  if (!btnChanged) return;
+  const available = hasGitView();
+  btnChanged.disabled = !available;
+  btnChanged.classList.toggle('disabled', !available);
+  if (!S.meta?.git) {
+    btnChanged.title = 'Git not available in workspace';
+  } else if (!available) {
+    btnChanged.title = 'There are no git modified files.';
+  } else if (!(S.meta.gitChanges > 0)) {
+    btnChanged.title = 'Git changes (working tree clean — showing unpushed commits)';
+  } else {
+    btnChanged.title = 'Git changes (show changed files only)';
   }
 }
 
@@ -425,9 +443,8 @@ export async function setSidebarMode(mode) {
   const btnCollapse = $('#btn-collapse-tree');
   const btnExpand = $('#btn-expand-tree');
   updateSidebarToggleState();
-  const hasGitChanges = !!(S.meta?.git && S.meta.gitChanges > 0);
 
-  if (mode === 'git' && hasGitChanges) {
+  if (mode === 'git' && hasGitView()) {
     treeEl.classList.add('changed-only');
     btnChanged?.classList.add('active');
     btnFiles?.classList.remove('active');
@@ -443,6 +460,9 @@ export async function setSidebarMode(mode) {
     if (btnCollapse) btnCollapse.hidden = false;
     if (btnExpand) btnExpand.hidden = false;
   }
+  markTreeCleanState();
+  // unpushed.js hangs its section off this; tree.js doesn't import it.
+  emit('sidebar:mode', { mode: treeEl.classList.contains('changed-only') ? 'git' : 'files' });
 }
 
 export function closeTreeMenu() {
@@ -528,8 +548,7 @@ export function initTree() {
   });
 
   $('#btn-changed')?.addEventListener('click', async () => {
-    const hasGitChanges = !!(S.meta?.git && S.meta.gitChanges > 0);
-    if (!hasGitChanges) return;
+    if (!hasGitView()) return;
     await setSidebarMode('git');
   });
 
@@ -605,7 +624,7 @@ export function initTree() {
   });
 
   on('tab:activated', ({ doc }) => {
-    if (!doc || !doc.path || doc.rev || !isAutoRevealEnabled()) return;
+    if (!doc || !doc.path || !isAutoRevealEnabled()) return;
     if (document.body.classList.contains('side-hidden')) return;
     revealFile(doc.path);
   });

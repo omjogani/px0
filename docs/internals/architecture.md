@@ -92,8 +92,6 @@ When hosted behind reverse proxies or multi-tenant review platforms, px0 support
 | `/api/gutter`         | `GET`  | Per-line change markers for code view gutter                            | JSON (`{added, modified, deleted}`)        |
 | `/api/stream`         | `GET`  | Unified SSE stream for real-time `git-status` and `metrics` events (aliased by `/api/git/stream`) | `text/event-stream`   |
 | `/api/git/refresh`    | `POST` | Triggers immediate git status check and returns status payload          | JSON (`{git, gitChanges, gitFiles, ...}`)  |
-| `/api/git/show`       | `GET`  | A commit's metadata and changed files (`?rev=<hex>`)                    | JSON (`{hash, short, subject, files, ...}`)|
-| `/api/git/show/diff`  | `GET`  | One file's highlighted diff within a commit (`?rev=<hex>&path=...`)     | JSON (`{path, hunks, truncated}`)          |
 | `/api/reindex`        | `POST` | Re-runs index walk and git status on demand (triggers frontend tab reload; see [`file-reload-and-updates.md`](file-reload-and-updates.md)) | JSON (`{files, indexMs}`)                  |
 | `/api/lsp/def`        | `GET`  | Go-to-Definition via LSP (`?path=...&line=...&col=...`)                 | JSON array of target locations             |
 | `/api/lsp/refs`       | `GET`  | Find References via LSP                                                 | JSON array of reference locations          |
