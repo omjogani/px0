@@ -5,7 +5,6 @@ import { updateStatus, setStatusNote, setLspState } from './status.js';
 import { openFile } from './tabs.js';
 import { renderResults, runSearch } from './search.js';
 import { inspectReferences, showRightInspector } from './inspector.js';
-import { loadProblems } from './problems.js';
 
 /* Language servers answer precisely but can take a long time to wake up, while
    the regex index answers in milliseconds and is always there. So: use the
@@ -32,12 +31,7 @@ export function canAskServer(at) {
    until it is up. Without this the first hover would find the server still
    "starting" and quietly do nothing, with no way for the state to advance. */
 export async function warmLSP(d, tries = 0) {
-  if (!d.lsp || d.lsp.state === 'off' || d.lsp.state === 'ready' || d.lsp.state === 'failed') {
-    if (d.lsp && (d.lsp.state === 'ready' || d.lsp.state === 'off' || d.lsp.state === 'failed')) {
-      loadProblems(d);
-    }
-    return;
-  }
+  if (!d.lsp || d.lsp.state === 'off' || d.lsp.state === 'ready' || d.lsp.state === 'failed') return;
   if (tries > 20) return;
   let j;
   try { j = await api('/api/lsp/warm', { path: d.path, wait: tries === 0 ? 1 : 1200 }); }
@@ -45,7 +39,6 @@ export async function warmLSP(d, tries = 0) {
   if (!S.tabs.includes(d)) return;
   d.lsp = { state: j.state, server: j.server, missing: j.missing || '' };
   if (doc_() === d) setLspState(j);
-  loadProblems(d);
   if (j.state === 'starting' || j.state === 'indexing') {
     setTimeout(() => warmLSP(d, tries + 1), 900);
   }

@@ -176,6 +176,16 @@ function renderDiff(d) {
   if (S.meta?.pr && d.prDiffHunks !== undefined) {
     const prHunks = d.prDiffHunks || [];
     const yourHunks = d.yourDiffHunks || [];
+    // Opened from the sidebar's "Yours" or "PR changes" scope: open the
+    // matching section and fold the other. Decided once per tab; after that
+    // the section's own header toggle wins.
+    const tree = $('#tree');
+    if (d.prCollapsed === undefined) {
+      d.prCollapsed = !!tree?.classList.contains('scope-yours') && yourHunks.length > 0;
+    }
+    if (d.yourCollapsed === undefined) {
+      d.yourCollapsed = !!tree?.classList.contains('scope-pr') && prHunks.length > 0;
+    }
     if (!prHunks.length && !yourHunks.length) {
       const p = document.createElement('div');
       p.className = 'diff-empty';
@@ -206,6 +216,19 @@ function renderDiff(d) {
   diffContent.append(frag);
   syncDiffAgentTargets();
   if (prSyncHandler) prSyncHandler();
+}
+
+/* Points a tab's diff at the section the sidebar scope is showing. A section
+   with nothing in it is left open: folding away the only content leaves an
+   empty pane. */
+export function focusDiffScope(d) {
+  const tree = $('#tree');
+  if (!d || !S.meta?.pr || !tree) return;
+  if (tree.classList.contains('scope-yours') && d.yourDiffHunks?.length !== 0) {
+    d.prCollapsed = true; d.yourCollapsed = false;
+  } else if (tree.classList.contains('scope-pr') && d.prDiffHunks?.length !== 0) {
+    d.prCollapsed = false; d.yourCollapsed = true;
+  }
 }
 
 function createDiffSection(d, kind, title, sub, populateBody) {
@@ -474,12 +497,6 @@ function lineCell(n, reviewable = true) {
     el.classList.add('diff-ln-nav');
     let title = 'Open in file view at line ' + n;
     const d = doc_();
-    if (d && d.problemsByLine && d.problemsByLine.has(+n)) {
-      const pList = d.problemsByLine.get(+n);
-      const worst = pList[0].severityNum;
-      el.classList.add(worst === 1 ? 'prob-err' : (worst === 2 ? 'prob-warn' : 'prob-info'));
-      title += ' · ' + pList.map(p => p.message).join(' • ');
-    }
     el.title = title;
     const btn = document.createElement('span');
     btn.className = 'line-btn';

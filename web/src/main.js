@@ -9,7 +9,7 @@ import { drawTree, treeEl, initTree, revealFile, refreshTree, restoreOpenDirs, s
 import { initSearch } from './search.js';
 import { initOutline } from './outline.js';
 import { initPanels } from './panels.js';
-import { initInspector } from './inspector.js';
+import { initInspector, showRightInspector } from './inspector.js';
 import { initCalls } from './calls.js';
 import { initFind } from './find.js';
 import { initPalette } from './palette.js';
@@ -27,8 +27,8 @@ import { initGitStream } from './gitstream.js';
 import { initGitPanel } from './gitpanel.js';
 import { initPR } from './pr.js';
 import { initLineComment } from './linecomment.js';
-import { initProblems } from './problems.js';
 import { initUnpushed, refreshUnpushed } from './unpushed.js';
+import { initPRScope } from './prscope.js';
 
 // Initialize all subsystems
 initRenderer();
@@ -57,8 +57,8 @@ initSettings();
 initVim();
 initImageViewer();
 initLineComment();
-initProblems();
 initUnpushed();
+initPRScope();
 
 // Bootstrap application lifecycle
 (async function boot() {
@@ -92,6 +92,7 @@ initUnpushed();
   updateSidebarToggleState();
   applyAgentMeta();
   initPR();
+  showRightInspector(); // the right sidebar starts open, on Threads when there is a harness
   document.title = S.meta.name + ' - px0';
   $('#root-name').textContent = S.meta.name;
   $('#root-name').title = S.meta.root;

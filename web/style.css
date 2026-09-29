@@ -242,6 +242,34 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
 #tree.changed-only .tr.file:not(.dirty) { display: none; }
 #tree.changed-only .tw:not(:has(.dirty)) { display: none; }
 
+/* PR review scope: whole PR vs only what you changed (prscope.js). */
+.scope-bar { display: flex; gap: 4px; padding: 5px 8px; border-bottom: 1px solid var(--line); flex: none; }
+.scope-bar[hidden] { display: none; }
+.scope-bar button {
+  flex: 1; font: 600 11px var(--ui); color: var(--faint); background: transparent;
+  border: 1px solid var(--line); border-radius: var(--r-sm, 4px); padding: 3px 6px; cursor: pointer;
+}
+.scope-bar button:hover { color: var(--fg); }
+.scope-bar button.active { color: var(--accent-fg); border-color: var(--accent); background: var(--bg2); }
+.scope-n { font: 700 10px var(--mono); opacity: .75; margin-left: 3px; }
+.scope-n.has { color: var(--accent-fg); opacity: 1; }
+#tree.changed-only.scope-yours .tr.file:not(.your-change) { display: none; }
+#tree.changed-only.scope-yours .tw:not(:has(.your-change)) { display: none; }
+/* "PR changes" shows the PR as it is: no YOU markers, and nothing only you touched. */
+#tree.changed-only.scope-pr .tr.file:not(.pr-file) { display: none; }
+#tree.changed-only.scope-pr .tw:not(:has(.pr-file)) { display: none; }
+#tree.scope-pr .gs-you-tag, #tree.scope-pr .stage-tick { display: none; }
+#tree.scope-pr .tr.dir.your-dirty > .nm::after { background: var(--accent); box-shadow: none; }
+#tree.scope-pr .tr.file.your-change .nm { font-weight: inherit; text-decoration: none; }
+#tree.scope-pr .tr.file.your-change.git-A .nm, #tree.scope-pr .tr.file.your-change.git-A .gs,
+#tree.scope-pr .tr.file.your-change.git-untracked .nm, #tree.scope-pr .tr.file.your-change.git-untracked .gs { color: var(--gi); }
+#tree.scope-pr .tr.file.your-change.git-D .nm, #tree.scope-pr .tr.file.your-change.git-D .gs { color: var(--gd); }
+#tree.scope-pr .tr.file.your-change.git-D .nm { text-decoration: line-through; }
+#tree.changed-only.no-yours::after {
+  content: "No changes of yours yet \2014 edit a file or commit, and it shows up here";
+  display: block; padding: 8px 12px; font: 11.5px var(--ui); color: var(--faint);
+}
+
 /* Git view on a clean working tree renders no rows at all, so the tree says
    why rather than looking like it failed to load. It keeps growing into the
    sidebar's spare height: it is the column's only flex-grow item, and taking
@@ -671,88 +699,6 @@ body.right-hidden #right-side, body.right-hidden #right-resizer { display: none;
 .cnode .car.cyc { cursor: default; font-size: 11px; }
 .cnone { padding-block: 1px; padding-right: 10px; font-size: 11px; font-style: italic; color: var(--faint); }
 
-/* Problems Tab and Pane */
-.prob-tab-badge {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 14px; height: 14px; padding: 0 4px; margin-left: 5px;
-  font-size: 9px; font-weight: 700; line-height: 1; border-radius: 7px;
-  vertical-align: middle;
-}
-.prob-tab-badge.prob-badge-error { background: var(--err); color: #fff; }
-.prob-tab-badge.prob-badge-warning { background: var(--warn, #e5a50a); color: #111; }
-.prob-tab-badge.prob-badge-info { background: var(--bg4); color: var(--fg); }
-
-.prob-bar { gap: 6px; }
-.prob-filters { display: flex; gap: 3px; }
-.prob-body { padding: 4px 0; overflow-y: auto; }
-
-.prob-section-head {
-  padding: 6px 12px 3px; font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.05em; color: var(--faint);
-  border-bottom: 1px solid var(--line); margin-top: 4px;
-}
-.prob-section-head:first-child { margin-top: 0; }
-
-.prob-item {
-  padding: 7px 12px; border-bottom: 1px solid var(--line);
-  cursor: pointer; transition: background 0.1s ease;
-  display: flex; flex-direction: column; gap: 4px;
-}
-.prob-item:hover { background: var(--bg2); }
-
-.prob-item-head {
-  display: flex; align-items: center; gap: 6px; font-size: 11px; flex-wrap: wrap;
-}
-.prob-chip {
-  font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: var(--r);
-  text-transform: uppercase; letter-spacing: 0.03em;
-}
-.prob-chip-error { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); border: 1px solid var(--err); }
-.prob-chip-warning { background: color-mix(in srgb, var(--warn, #e5a50a) 18%, transparent); color: var(--warn, #e5a50a); border: 1px solid var(--warn, #e5a50a); }
-.prob-chip-info { background: var(--bg3); color: var(--dim); border: 1px solid var(--line); }
-
-.prob-badge-changed {
-  font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: var(--r);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent-fg); border: 1px solid var(--accent);
-}
-.prob-loc { font-family: var(--mono); color: var(--dim); font-size: 11px; }
-.prob-code { font-family: var(--mono); color: var(--faint); font-size: 11px; margin-left: auto; }
-
-.prob-msg {
-  font-family: var(--mono); font-size: 12px; line-height: 1.45;
-  color: var(--fg); white-space: pre-wrap; word-break: break-word;
-}
-
-.prob-related-list {
-  display: flex; flex-direction: column; gap: 2px; margin-top: 2px;
-  padding-left: 8px; border-left: 2px solid var(--line);
-}
-.prob-related-item {
-  font-size: 11px; color: var(--dim); cursor: pointer;
-}
-.prob-related-item:hover { color: var(--accent-fg); }
-.prob-related-target {
-  font-family: var(--mono); text-decoration: underline; color: var(--accent-fg);
-}
-.prob-related-msg { color: var(--faint); }
-
-.prob-hint { padding: 16px 12px; line-height: 1.5; }
-.prob-clean { color: var(--gi); display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
-.prob-clean-icon {
-  width: 28px; height: 28px; border-radius: 50%;
-  background: color-mix(in srgb, var(--gi) 15%, transparent);
-  border: 1px solid var(--gi); display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 14px;
-}
-.prob-err-msg { color: var(--err); }
-.prob-spinner {
-  display: inline-block; width: 12px; height: 12px; border-radius: 50%;
-  border: 2px solid var(--dim); border-top-color: var(--accent);
-  animation: prob-spin 0.8s linear infinite; margin-right: 6px; vertical-align: middle;
-}
-@keyframes prob-spin { to { transform: rotate(360deg); } }
-
 /* ---------- main ---------- */
 #main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
 /* View-mode switches (Markdown Preview/Source, git Diff), pinned to the right
@@ -993,24 +939,6 @@ body.word-wrap .c { white-space: pre-wrap; word-break: break-word; overflow-wrap
   border-left: 4px solid var(--gd);
   border-top: 3px solid transparent; border-bottom: 3px solid transparent;
 }
-
-/* Gutter problem markers */
-.g.prob-err::before, .g.prob-warn::before, .g.prob-info::before {
-  content: ""; position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
-  width: 5px; height: 5px; border-radius: 50%; z-index: 3; pointer-events: none;
-}
-.g.prob-err::before { background: var(--err); box-shadow: 0 0 3px var(--err); }
-.g.prob-warn::before { background: var(--warn, #e5a50a); }
-.g.prob-info::before { background: var(--accent); }
-
-/* Diff gutter problem markers */
-.diff-ln.prob-err::before, .diff-ln.prob-warn::before, .diff-ln.prob-info::before {
-  content: ""; position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
-  width: 5px; height: 5px; border-radius: 50%; z-index: 3; pointer-events: none;
-}
-.diff-ln.prob-err::before { background: var(--err); box-shadow: 0 0 3px var(--err); }
-.diff-ln.prob-warn::before { background: var(--warn, #e5a50a); }
-.diff-ln.prob-info::before { background: var(--accent); }
 
 .row mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 1px 0; }
 /* The current match is a solid fill, so syntax colours on it are unreadable. */
@@ -2949,8 +2877,8 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
 .thr-body .thr-img { max-width: 100%; border-radius: var(--r); margin: 4px 0; }
 .thr-steps { font: 11px var(--mono); color: var(--faint); }
 .thr-steps summary { cursor: pointer; user-select: none; }
-.thr-step-list { display: flex; flex-direction: column; gap: 2px; padding: 3px 0 3px 10px; max-height: 140px; overflow-y: auto; }
-.thr-step-list div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thr-step-list { display: flex; flex-direction: column; gap: 2px; padding: 3px 0 3px 10px; }
+.thr-step-list div { flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thr-err {
   font: 11px var(--mono); color: var(--err); white-space: pre-wrap; overflow-wrap: anywhere;
   border: 1px solid var(--err); border-radius: var(--r); padding: 5px 7px;
@@ -2962,4 +2890,14 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
   border-radius: var(--r); padding: 2px 6px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .thr-file:hover { border-color: var(--accent); }
+.thr-scope { display: flex; align-items: center; gap: 4px; }
+.thr-scope[hidden] { display: none; }
+.thr-scope-label { font: 600 10.5px var(--ui); color: var(--faint); margin-right: 2px; }
+.thr-scope button {
+  font: 600 11px var(--ui); color: var(--faint); background: transparent;
+  border: 1px solid var(--line); border-radius: var(--r-sm, 4px); padding: 2px 8px; cursor: pointer;
+}
+.thr-scope button:hover:not(:disabled) { color: var(--fg); }
+.thr-scope button.active { color: var(--accent-fg); border-color: var(--accent); background: var(--bg2); }
+.thr-scope button:disabled { opacity: .4; cursor: default; }
 .thr-compose { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); }

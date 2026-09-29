@@ -13,7 +13,6 @@ import { clearLink } from './hover.js';
 import { clearFind } from './find.js';
 import { clearSelectAll } from './selbar.js';
 import { syncPreview, previewing, previewLine } from './markdown.js';
-import { updateProblemsBadge, renderProblemsPane } from './problems.js';
 import { syncDiffView, layoutPref, diffScrollTop, setDiffMode, setSourceJumpHandler, setCommitStepHandler, scrollDiffToLine } from './diff.js';
 import { syncImageView } from './imageview.js';
 
@@ -191,8 +190,6 @@ export async function openFile(path, opts = {}) {
   }
   render();
   updateStatus();
-  updateProblemsBadge(d);
-  if ($('#pane-right-problems')?.classList.contains('active')) renderProblemsPane();
   if ($('#panel-outline')?.classList.contains('active')) loadOutline();
   if (push) pushHistory(path, line || d.cur);
   saveWorkspaceState();
@@ -231,7 +228,6 @@ export async function loadGutter(d) {
     if (doc_() === d) {
       updateStatus();
       render();
-      if ($('#pane-right-problems')?.classList.contains('active')) renderProblemsPane();
     }
     drawTabs();
   } catch {}
@@ -343,10 +339,6 @@ export async function reloadOpenTabs({ onlyIfChanged = false } = {}) {
   // Load all gutters concurrently before initial paint
   await Promise.allSettled(S.tabs.filter(t => !t.isImage).map(t => loadGutter(t)));
 
-  for (const t of S.tabs) {
-    t.problemsLoaded = false;
-  }
-
   const d = doc_();
   if (d) {
     S.lsp.state = (d.lsp && d.lsp.state) || 'off';
@@ -359,8 +351,6 @@ export async function reloadOpenTabs({ onlyIfChanged = false } = {}) {
     layout();
     vp.scrollTop = d.scrollTop;
     render();
-    updateProblemsBadge(d);
-    if ($('#pane-right-problems')?.classList.contains('active')) renderProblemsPane();
     if ($('#panel-outline')?.classList.contains('active')) loadOutline();
   }
 
@@ -511,8 +501,6 @@ export function switchTab(i) {
   drawTabs(); drawCrumbs(); layout();
   vp.scrollTop = S.tabs[i].scrollTop;
   render(); updateStatus();
-  updateProblemsBadge(S.tabs[i]);
-  if ($('#pane-right-problems')?.classList.contains('active')) renderProblemsPane();
   if ($('#panel-outline')?.classList.contains('active')) loadOutline();
   pushHistory(S.tabs[i].path, S.tabs[i].cur);
   saveWorkspaceState();

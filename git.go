@@ -476,6 +476,79 @@ func gitDiff(root, relpath string) string {
 	return gitDiffAgainst(root, relpath, "HEAD")
 }
 
+// gitDiffFull returns the whole unified diff for `git diff <refs...>`, capped at
+// max bytes (with a marker line when cut). Untracked files are not part of a git
+// diff; callers that care list them separately (gitUntracked).
+func gitDiffFull(root string, max int, refs ...string) string {
+	if !gitAvailable(root) {
+		return ""
+	}
+	args := append([]string{"-C", root, "diff", "--no-color", "--no-ext-diff"}, refs...)
+	out, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return ""
+	}
+	if max > 0 && len(out) > max {
+		return string(out[:max]) + "\n… diff truncated; run git diff for the rest …\n"
+	}
+	return string(out)
+}
+
+// gitUntracked lists untracked, non-ignored files relative to the served root.
+func gitUntracked(root string) []string {
+	info := gitProbe(root)
+	if !info.ok {
+		return nil
+	}
+	out, err := exec.Command("git", "-C", root, "ls-files", "--others", "--exclude-standard", "-z").Output()
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			files = append(files, p)
+		}
+	}
+	return files
+}
+
+// gitFilesBetween maps each path that differs between two commits to its
+// name-status letter (A, M, D, R...), relative to the served root (paths outside
+// it are dropped). PR review uses it for the PR's own file set and statuses:
+// diffBase..head, fixed until the next Pull.
+func gitFilesBetween(root, from, to string) map[string]string {
+	info := gitProbe(root)
+	if !info.ok || from == "" || to == "" {
+		return nil
+	}
+	out, err := exec.Command("git", "-C", root, "diff", "--name-status", "-z", from, to).Output()
+	if err != nil {
+		return nil
+	}
+	key := repoRelKey(info, root)
+	files := map[string]string{}
+	parts := strings.Split(string(out), "\x00")
+	for i := 0; i < len(parts); i++ {
+		st := parts[i]
+		if st == "" {
+			continue
+		}
+		code := st[:1]
+		if code == "R" || code == "C" {
+			i += 2 // R<score> \0 <src> \0 <dst>
+		} else {
+			i++
+		}
+		if i < len(parts) {
+			if k, ok := key(parts[i]); ok {
+				files[k] = code
+			}
+		}
+	}
+	return files
+}
+
 // gitDiffAgainst is gitDiff generalized to an arbitrary base ref, so a PR
 // review session (pr.go) can diff a file against the merge-base with the
 // PR's target branch instead of the working tree's HEAD.
@@ -721,13 +794,40 @@ func gitUnpushedCommits(root string, limit int) (upstream string, commits []Unpu
 	if upstream == "" {
 		return "", nil
 	}
+	return upstream, gitCommitsInRange(root, "@{u}..HEAD", limit)
+}
+
+// gitCommitsSince lists the commits in base..HEAD, newest first. PR review
+// checkouts sit on a detached HEAD with no upstream, so the PR head they were
+// checked out at (or last pushed to) stands in as the boundary.
+func gitCommitsSince(root, base string, limit int) []UnpushedCommit {
+	if !validSHA(base) {
+		return nil
+	}
+	return gitCommitsInRange(root, base+"..HEAD", limit)
+}
+
+// gitCountSince returns how many commits HEAD has that base does not.
+func gitCountSince(root, base string) int {
+	if !validSHA(base) {
+		return 0
+	}
+	out, err := exec.Command("git", "-C", root, "rev-list", "--count", base+"..HEAD").Output()
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return n
+}
+
+func gitCommitsInRange(root, rng string, limit int) (commits []UnpushedCommit) {
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
 	out, err := exec.Command("git", "-C", root, "log", fmt.Sprintf("-n%d", limit),
-		"--format=%H%x1f%h%x1f%s%x1f%an%x1f%cr", "@{u}..HEAD").Output()
+		"--format=%H%x1f%h%x1f%s%x1f%an%x1f%cr", rng).Output()
 	if err != nil {
-		return upstream, nil
+		return nil
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
@@ -749,7 +849,7 @@ func gitUnpushedCommits(root string, limit int) (upstream string, commits []Unpu
 		}
 		commits = append(commits, c)
 	}
-	return upstream, commits
+	return commits
 }
 
 // commitDiffArgs are the diff-tree flags every per-commit read shares: the

@@ -17,7 +17,7 @@ import { $, S, esc, api } from './state.js';
 import { on } from './bus.js';
 import { openFile } from './tabs.js';
 import { copyToClipboard } from './ui.js';
-import { treeEl, updateSidebarToggleState } from './tree.js';
+import { treeEl, updateSidebarToggleState, inGitMode } from './tree.js';
 import { makeCardKeeper, pointerPos } from './cardkeep.js';
 import { commitFileRows, COMMIT_FILES_PAGE } from './commitfiles.js';
 
@@ -38,9 +38,6 @@ let upSig = '';                   // last (ahead, head SHA) seen, to skip pointl
 let upCardTimer = 0, upCardSeq = 0, upCardSha = '';
 let upKeeper = null;
 
-function inGitMode() {
-  return !!treeEl?.classList.contains('changed-only');
-}
 
 /* Visible only in "changed files only" mode, and only with something to list. */
 export function syncUnpushedVisibility() {
@@ -90,6 +87,8 @@ function drawUnpushed() {
   const el = upBody();
   if (!el) return;
 
+  const title = $('.unpushed-title');
+  if (title) title.textContent = S.meta?.pr ? 'Your commits' : 'Unpushed';
   const count = $('#unpushed-count');
   if (count) count.textContent = upList.length ? String(upList.length) : '';
   const up = $('#unpushed-upstream');

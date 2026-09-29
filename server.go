@@ -149,7 +149,6 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(s.routePath("/api/lsp/calls"), s.handleLSPCalls)
 	s.mux.HandleFunc(s.routePath("/api/lsp/symbols"), s.handleLSPSymbols)
 	s.mux.HandleFunc(s.routePath("/api/lsp/hover"), s.handleLSPHover)
-	s.mux.HandleFunc(s.routePath("/api/lsp/problems"), s.handleLSPProblems)
 	s.mux.HandleFunc(s.routePath("/api/lsp/warm"), s.handleLSPWarm)
 	s.mux.HandleFunc(s.routePath("/api/lsp/setup"), s.handleLSPSetup)
 	s.mux.HandleFunc(s.routePath("/api/lsp/install"), s.handleLSPInstall)
@@ -167,6 +166,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(s.routePath("/api/threads/create"), s.handleThreadCreate)
 	s.mux.HandleFunc(s.routePath("/api/threads/send"), s.handleThreadSend)
 	s.mux.HandleFunc(s.routePath("/api/threads/cancel"), s.handleThreadCancel)
+	s.mux.HandleFunc(s.routePath("/api/threads/scope"), s.handleThreadScope)
 	s.mux.HandleFunc(s.routePath("/api/threads/delete"), s.handleThreadDelete)
 	s.mux.HandleFunc(s.routePath("/api/threads/stream"), s.handleThreadStream)
 	s.mux.HandleFunc(s.routePath("/api/settings"), s.handleSettings)
@@ -418,6 +418,7 @@ func (s *Server) SetAgent(a *agentManager) {
 	s.agent = a
 	if a != nil {
 		s.threads = newThreadManager(a, s.ix.Root())
+		s.threads.prContext = s.prThreadContext
 		a.onEdit = func() {
 			if s.gitWatcher != nil {
 				s.gitWatcher.Trigger()
@@ -426,17 +427,117 @@ func (s *Server) SetAgent(a *agentManager) {
 	}
 }
 
+// diffFileMax caps the diff file handed to a thread; past it the harness is
+// pointed at the git command instead.
+const diffFileMax = 2 << 20
+
+// prThreadContext tells a coding harness what a PR-review thread is about. A PR
+// checkout is a plain worktree whose recent history is the PR's commits followed
+// by the reviewer's own, so a harness asked about "the PR" left to itself looks
+// at the last commit. Each scope names an exact range instead, and gets the
+// matching diff as a file so a big change doesn't have to be re-derived:
+//
+//	pr        the whole pull request: merge-base..PR head
+//	mine      the reviewer's own work on top: PR head..working tree
+//	selection just the anchored code; the PR is background
+//
+// An unset scope means the whole PR. Empty outside PR review.
+func (s *Server) prThreadContext(scope string) string {
+	p := s.pr
+	if p == nil {
+		return ""
+	}
+	p.mu.Lock()
+	num, title, base, head := p.meta.Number, p.meta.Title, p.meta.BaseRef, p.meta.HeadRef
+	mb, headSHA, url := p.diffBase, p.meta.HeadSHA, p.target.URL
+	p.mu.Unlock()
+	root := s.ix.Root()
+	short := func(x string) string { return x[:min(12, len(x))] }
+	haveRange := mb != "" && mb != "HEAD" && headSHA != ""
+	if scope == "" {
+		scope = "pr"
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "This workspace is a checkout of pull request #%d %q (%s ← %s)", num, title, base, head)
+	if url != "" {
+		fmt.Fprintf(&b, ", %s", url)
+	}
+	b.WriteString(". ")
+
+	prRange := ""
+	if haveRange {
+		prRange = fmt.Sprintf("`git diff %s %s` (merge-base with %s to the PR head %s)", mb, headSHA, base, short(headSHA))
+	}
+	switch scope {
+	case "mine":
+		fmt.Fprintf(&b, "The user is asking about their OWN changes on top of the PR, not the PR itself. ")
+		if headSHA == "" {
+			b.WriteString("Look at `git status` and `git log` for them.")
+			break
+		}
+		fmt.Fprintf(&b, "Those are exactly `git diff %s` (working tree against the PR head, staged and unstaged) and `git log --stat %s..HEAD` (their commits)", headSHA, headSHA)
+		if un := gitUntracked(root); len(un) > 0 {
+			if len(un) > 40 {
+				un = append(un[:40], fmt.Sprintf("(+%d more)", len(un)-40))
+			}
+			fmt.Fprintf(&b, ", plus untracked files: %s", strings.Join(un, ", "))
+		}
+		b.WriteString(". ")
+		if f := p.writeScopeFile("your-changes.diff", gitDiffFull(root, diffFileMax, headSHA)); f != "" {
+			fmt.Fprintf(&b, "That diff is also saved at %s. ", f)
+		}
+		if prRange != "" {
+			fmt.Fprintf(&b, "The PR's own change (%s) is background only; do not review it unless asked.", prRange)
+		}
+	case "selection":
+		b.WriteString("The user is asking about the code they anchored this conversation to; the rest of the PR is background")
+		if prRange != "" {
+			fmt.Fprintf(&b, " (%s shows it if you need it)", prRange)
+		}
+		b.WriteString(".")
+	default: // "pr"
+		b.WriteString("When the user says \"the PR\" or \"this PR\", they mean the entire pull request, not the latest commit or the file they are looking at.")
+		if !haveRange {
+			break
+		}
+		fmt.Fprintf(&b, " The PR is exactly %s: read it with that and `git log --stat %s..%s`; do not review from `git show HEAD` or `git diff HEAD~1`.", prRange, mb, headSHA)
+		if f := p.writeScopeFile("pr.diff", gitDiffFull(root, diffFileMax, mb, headSHA)); f != "" {
+			fmt.Fprintf(&b, " The full diff is also saved at %s.", f)
+		}
+		if files := s.ix.PRFiles(); len(files) > 0 {
+			names := make([]string, 0, len(files))
+			for f, st := range files {
+				names = append(names, st+" "+f)
+			}
+			sort.Strings(names)
+			more := ""
+			if len(names) > 60 {
+				more = fmt.Sprintf(" (+%d more)", len(names)-60)
+				names = names[:60]
+			}
+			fmt.Fprintf(&b, " Files it changes (%d)%s: %s.", len(files), more, strings.Join(names, ", "))
+		}
+		fmt.Fprintf(&b, " Anything after %s (`git diff %s`, or commits above it) is the reviewer's own work on top of the PR, not part of it.", short(headSHA), headSHA)
+	}
+	return b.String()
+}
+
 // SetPR marks this process as a PR review session: diffs are computed
 // against the PR's merge-base instead of HEAD, and the /api/pr/* endpoints
 // become live. Unset (nil) for a normal workspace.
 func (s *Server) SetPR(p *prSession) {
 	s.pr = p
+	if s.threads != nil {
+		s.threads.prContext = s.prThreadContext
+	}
 	if p != nil {
 		s.diffBase = p.diffBase
 		s.prHeadSHA = p.meta.HeadSHA
 		if s.ix != nil {
 			s.ix.SetDiffBase(p.diffBase)
 			s.ix.SetPRHead(p.meta.HeadSHA)
+			s.ix.SetPushedHead(p.meta.HeadSHA)
 		}
 		if s.gitWatcher != nil {
 			s.gitWatcher.Trigger()
@@ -554,6 +655,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 			"diffBaseWarning": p.diffBaseWarning,
 			"headSHA":         p.meta.HeadSHA,
 			"url":             p.target.URL,
+			"files":           s.ix.PRFiles(),
 		}
 		p.mu.Unlock()
 	}
@@ -716,58 +818,6 @@ func (s *Server) handleLSPWarm(w http.ResponseWriter, r *http.Request) {
 	// The spawn keeps going even when this call gives up waiting on it.
 	_ = s.lsp.EnsureOpen(ctx, abs, rel)
 	writeJSON(w, s.lspBrief(rel))
-}
-
-func (s *Server) handleLSPProblems(w http.ResponseWriter, r *http.Request) {
-	abs, rel, ok := s.resolvePath(r.URL.Query().Get("path"))
-	if !ok {
-		fail(w, 400, "bad path")
-		return
-	}
-	ms, _ := strconv.Atoi(r.URL.Query().Get("wait"))
-	if ms < 0 {
-		ms = 0
-	}
-	if ms > 10000 {
-		ms = 10000
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(ms)*time.Millisecond)
-	defer cancel()
-
-	probs, err := s.lsp.Problems(ctx, abs, rel, ms)
-	state, srv := s.lsp.State(rel)
-
-	counts := map[string]int{
-		"error":   0,
-		"warning": 0,
-		"info":    0,
-		"hint":    0,
-		"total":   len(probs),
-	}
-	for _, p := range probs {
-		switch p.SeverityNum {
-		case 1:
-			counts["error"]++
-		case 2:
-			counts["warning"]++
-		case 3:
-			counts["info"]++
-		case 4:
-			counts["hint"]++
-		}
-	}
-
-	resp := map[string]any{
-		"path":     rel,
-		"problems": probs,
-		"counts":   counts,
-		"state":    string(state),
-		"server":   srv,
-	}
-	if err != nil && err != context.DeadlineExceeded && err != context.Canceled {
-		resp["error"] = err.Error()
-	}
-	writeJSON(w, resp)
 }
 
 func (s *Server) handleLSPHover(w http.ResponseWriter, r *http.Request) {
@@ -1339,6 +1389,18 @@ func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
 			fail(w, http.StatusBadGateway, err.Error())
 			return
 		}
+		// Pushed commits are part of the PR now: move the PR-head boundary so
+		// they stop being "yours" (and the PR's file set picks them up).
+		s.pr.mu.Lock()
+		s.prHeadSHA = s.pr.meta.HeadSHA
+		s.pr.mu.Unlock()
+		if s.ix != nil {
+			s.ix.SetPRHead(s.prHeadSHA)
+			s.ix.SetPushedHead(s.prHeadSHA)
+		}
+		if s.gitWatcher != nil {
+			s.gitWatcher.Trigger()
+		}
 		writeJSON(w, map[string]any{"ok": true})
 		return
 	}
@@ -1383,6 +1445,7 @@ func (s *Server) handleGitPull(w http.ResponseWriter, r *http.Request) {
 		if s.ix != nil {
 			s.ix.SetDiffBase(s.diffBase)
 			s.ix.SetPRHead(s.prHeadSHA)
+			s.ix.SetPushedHead(s.prHeadSHA)
 		}
 		if s.gitWatcher != nil {
 			s.gitWatcher.Trigger()
@@ -1458,7 +1521,18 @@ func (s *Server) handleUnpushed(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	upstream, commits := gitUnpushedCommits(s.ix.Root(), limit)
+	var upstream string
+	var commits []UnpushedCommit
+	if s.pr != nil {
+		// Detached PR checkout: your commits are everything past the PR head.
+		s.pr.mu.Lock()
+		head, branch := s.pr.remoteHead(), s.pr.meta.HeadRef
+		s.pr.mu.Unlock()
+		commits = gitCommitsSince(s.ix.Root(), head, limit)
+		upstream = fmt.Sprintf("PR #%d head (%s)", s.pr.meta.Number, branch)
+	} else {
+		upstream, commits = gitUnpushedCommits(s.ix.Root(), limit)
+	}
 	if commits == nil {
 		commits = []UnpushedCommit{}
 	}

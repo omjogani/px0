@@ -6,6 +6,7 @@ import { render } from './renderer.js';
 import { updateStatus, updateMetricsDisplay } from './status.js';
 import { updateGitPanel } from './gitpanel.js';
 import { refreshUnpushed } from './unpushed.js';
+import { updateScopeCounts } from './prscope.js';
 
 let eventSource = null;
 let reconnectTimer = null;
@@ -149,6 +150,7 @@ async function handleGitStatus(data) {
 
   // Patch rendered tree items in place without full DOM reload
   await patchTreeGitStatus(statuses, dirtyDirs, staged, yourStatuses, yourDirtyDirs);
+  updateScopeCounts(statuses, yourStatuses);
   updateGitPanel(data);
 
   // Close tabs that were opened in git diff view or currently in diff view if their changes are gone.
