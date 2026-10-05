@@ -14,6 +14,7 @@ import { refreshUnpushed } from './unpushed.js';
 import { openFile } from './tabs.js';
 import { on } from './bus.js';
 import { commitFileRows, COMMIT_FILES_PAGE, loadCommitFiles, cachedCommitFiles } from './commitfiles.js';
+import { triggerRefresh } from './gitstream.js';
 
 const panel = () => $('#git-panel');
 
@@ -104,7 +105,7 @@ export function updateGitPanel(payload) {
     branchEl.title = branch;
   }
   const staged = payload?.staged ? Object.keys(payload.staged).length : 0;
-  const changed = payload?.gitChanges || 0;
+  const changed = payload?.gitChanges ?? (payload?.statuses ? Object.keys(payload.statuses).length : (S.meta?.gitChanges || 0));
   const countsEl = $('#git-counts');
   if (countsEl) {
     countsEl.textContent = changed ? staged + ' / ' + changed + ' staged' : '';
@@ -183,6 +184,7 @@ async function doStageAll() {
   }
   try {
     await apiPostJson('/api/git/stage', { path: '.' });
+    await triggerRefresh();
     if (btn) {
       btn.textContent = prevText;
       flashActionSuccess(btn, 'Staged');
@@ -198,6 +200,7 @@ async function doStageAll() {
 export async function unstagePath(path) {
   try {
     await apiPostJson('/api/git/unstage', { path });
+    await triggerRefresh();
   } catch (e) {
     showToast('!', e.message || 'Could not unstage');
   }
@@ -257,6 +260,7 @@ async function doCommit() {
     }
     await fetchRecentCommits();
     await refreshUnpushed();
+    await triggerRefresh();
   } catch (e) {
     if (btn) btn.textContent = prevText;
     showToast('!', e.message || 'Commit failed');
@@ -450,6 +454,7 @@ async function commitWithMessage(message, btn) {
     showToast('✓', 'Committed with AI');
     await fetchRecentCommits();
     await refreshUnpushed();
+    await triggerRefresh();
     if (btn) {
       btn.textContent = 'Stage all + Commit with AI';
       flashActionSuccess(btn, 'Committed');
