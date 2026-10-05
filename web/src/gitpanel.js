@@ -629,10 +629,17 @@ function showMoreCommitFiles(el) {
 }
 
 function openCommitPath(el, path) {
+  // px0 has no diff for a binary file, so say so rather than doing nothing.
+  if (cachedCommitFiles(el.dataset.sha)?.find(f => f.path === path)?.binary) {
+    showToast('!', 'Binary file, no diff to show');
+    return;
+  }
   openFile(path, { ref: el.dataset.sha, view: 'diff' });
 }
 
+// Double-click or Enter on a commit: expand it and open its first file.
 async function openFirstCommitFile(el) {
+  if (!el.classList.contains('expanded')) setCommitExpanded(el, true);
   try {
     const files = await loadCommitFiles(el.dataset.sha);
     if (files.length) openCommitPath(el, files[0].path);
@@ -682,9 +689,7 @@ function initCommitList() {
   list.addEventListener('dblclick', e => {
     const row = e.target.closest('.git-commit-row');
     if (!row || e.target.closest('.git-commit-sha')) return;
-    const el = row.closest('.git-commit');
-    if (!el.classList.contains('expanded')) setCommitExpanded(el, true);
-    openFirstCommitFile(el);
+    openFirstCommitFile(row.closest('.git-commit'));
   });
   list.addEventListener('keydown', e => {
     const item = e.target.closest('.git-commit-row, .up-file, .up-more');

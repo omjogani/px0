@@ -357,7 +357,8 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
 .up-file .gs.git-A, .up-file .gs.git-untracked { color: var(--gi); }
 .up-file .gs.git-D { color: var(--gd); }
 .up-file:focus-visible, .up-more:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
-.up-file-stat { flex: none; display: inline-flex; gap: 4px; font: 10.5px var(--mono); }
+.up-file-stat { flex: none; display: inline-flex; gap: 4px; margin-left: auto; font: 10.5px var(--mono); }
+.up-file-stat + .gs { margin-left: 0; }
 .up-file-add { color: var(--gi); }
 .up-file-del { color: var(--gd); }
 .up-file-bin { color: var(--faint); }
